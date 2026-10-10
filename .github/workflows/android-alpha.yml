@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       api_base_url:
-        description: 'Optional public HTTPS API base URL; leave blank for device-only alpha'
-        required: false
+        description: 'Required public HTTPS base URL, without /api (this workflow does not deploy a server)'
+        required: true
         default: ''
         type: string
 
@@ -24,14 +24,16 @@ jobs:
       API_BASE_URL: ${{ inputs.api_base_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Validate optional API URL
+      - name: Validate required API URL
         shell: python
         run: |
           import ipaddress
           import os
-          from urllib.parse import urlsplit
+          from urllib.parse import unquote, urlsplit
 
           value = os.environ.get('API_BASE_URL', '')
+          if not value:
+              raise SystemExit('API_BASE_URL is required. There is no local-account fallback.')
           if value:
               if any(c.isspace() or ord(c) < 32 for c in value) or '\\' in value:
                   raise SystemExit('API URL must not contain whitespace or backslashes.')
@@ -40,6 +42,8 @@ jobs:
                       or parsed.username or parsed.password
                       or parsed.query or parsed.fragment):
                   raise SystemExit('Use an HTTPS URL without credentials, query, or fragment.')
+              if unquote(parsed.path).rstrip('/').lower().endswith('/api'):
+                  raise SystemExit('Use the service base URL without the /api suffix.')
               # Accessing port also validates the port syntax and range.
               _ = parsed.port
               if parsed.hostname.lower() == 'localhost' or parsed.hostname.endswith('.local'):
@@ -58,6 +62,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Install media runtime
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y ffmpeg
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -65,21 +71,19 @@ jobs:
           cache: true
       - name: Resolve packages
         run: flutter pub get
+      - name: Verify shared activity catalog
+        run: node scripts/generate-catalog.mjs --check
       - name: Analyze
         run: flutter analyze
       - name: Test
         run: flutter test
-      - name: Node API integration tests
-        run: node --test server/server.test.mjs
+      - name: Node API and real media integration tests
+        run: node --test server/server.test.mjs server/media.test.mjs server/catalog.test.mjs
       - name: Build debug APKs
         shell: bash
         run: |
           set -euo pipefail
-          args=(build apk --debug --split-per-abi)
-          if [[ -n "$API_BASE_URL" ]]; then
-            args+=("--dart-define=API_BASE_URL=$API_BASE_URL")
-          fi
-          flutter "${args[@]}"
+          flutter build apk --debug --split-per-abi "--dart-define=API_BASE_URL=$API_BASE_URL"
           cd build/app/outputs/flutter-apk
           sha256sum app-*-debug.apk > SHA256SUMS.txt
       - name: Upload installable alpha APKs
