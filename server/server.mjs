@@ -48,7 +48,7 @@ function profileInput(body) {
 
 function textInput(value, required) {
   assert(typeof value === 'string' && charLength(value) <= 300, 400, '文字记录最多 300 字');
-  assert(!required || value.trim().length > 0, 400, '请写下一点发现后再完成');
+  assert(!required || value.trim().length > 0, 400, '请先写一点记录，再完成并保存。');
   return required ? value.trim() : value;
 }
 
@@ -280,27 +280,27 @@ export function createApp({ databasePath = './data/sidequest.sqlite', now = () =
           db.prepare('UPDATE users SET role = ?, preferences = ? WHERE id = ?').run(profile.role, JSON.stringify(profile.preferences), auth.id);
         } else if (action === 'claim') {
           if (state.active_quest_id) return { state: snapshot(auth.id) };
-          assert(!state.can_request_next, 409, '这条支线已经完成，请主动选择下一条');
+          assert(!state.can_request_next, 409, '这次已完成，可以从首页继续探索。');
           db.prepare('UPDATE quest_state SET active_quest_id = recommended_quest_id WHERE user_id = ?').run(auth.id);
         } else if (action === 'replace') {
-          assert(!state.can_request_next, 409, '这条支线已经完成，请主动选择下一条');
-          assert(state.replaced_on !== calendarDay(now()), 409, '今天已更换过一次，仍可随时安全停止');
+          assert(!state.can_request_next, 409, '这次已完成，可以从首页继续探索。');
+          assert(state.replaced_on !== calendarDay(now()), 409, '今天已经更换过一次，也可以先放一放。');
           const quest = nextQuest(state.recommended_quest_id);
           db.prepare("UPDATE quest_state SET recommended_quest_id = ?, active_quest_id = ?, replaced_on = ?, draft = '' WHERE user_id = ?")
             .run(quest, state.active_quest_id ? quest : null, calendarDay(now()), auth.id);
         } else if (action === 'stop') {
           db.prepare('UPDATE quest_state SET active_quest_id = NULL WHERE user_id = ?').run(auth.id);
         } else if (action === 'draft') {
-          assert(state.active_quest_id, 409, '请先领取一条支线再记录');
+          assert(state.active_quest_id, 409, '请先开始活动，再写记录。');
           db.prepare('UPDATE quest_state SET draft = ? WHERE user_id = ?').run(textInput(body.text, false), auth.id);
         } else if (action === 'complete') {
-          assert(state.active_quest_id, 409, '请先领取一条支线');
+          assert(state.active_quest_id, 409, '请先开始活动，再写记录。');
           const text = textInput(body.text, true);
           db.prepare('INSERT INTO entries(id, user_id, quest_id, quest_title, text, created_at) VALUES (?, ?, ?, ?, ?, ?)')
             .run(randomUUID(), auth.id, state.active_quest_id, questTitle(state.active_quest_id), text, now().toISOString());
           db.prepare("UPDATE quest_state SET active_quest_id = NULL, draft = '', can_request_next = 1 WHERE user_id = ?").run(auth.id);
         } else if (action === 'next') {
-          assert(!state.active_quest_id && state.can_request_next, 409, '完成当前支线后，才可以再选一条');
+          assert(!state.active_quest_id && state.can_request_next, 409, '完成当前活动后，可以继续探索。');
           db.prepare('UPDATE quest_state SET recommended_quest_id = ?, can_request_next = 0 WHERE user_id = ?').run(nextQuest(state.recommended_quest_id), auth.id);
         } else if (action === 'delete-entry') {
           assert(typeof body.id === 'string' && body.id.length <= 64, 400, '记录标识无效');

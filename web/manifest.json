@@ -1,11 +1,11 @@
 {
-    "name": "sidequest",
-    "short_name": "sidequest",
+    "name": "支线",
+    "short_name": "支线",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#F7F6F0",
+    "theme_color": "#234D3C",
+    "description": "发现日常的小变化，留下自己的记录。",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

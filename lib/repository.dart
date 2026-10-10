@@ -44,7 +44,7 @@ void _validatePreferences(String role, List<String> chosen) {
 
 void _validateText(String text, {bool required = false}) {
   if (required && text.trim().isEmpty) {
-    throw const QuestException('写下一点发现，再完成支线吧。');
+    throw const QuestException('请先写一点记录，再完成并保存。');
   }
   if (text.runes.length > 300) {
     throw const QuestException('记录最多 300 个字，请稍微精简一下。');
@@ -140,7 +140,7 @@ class LocalQuestRepository implements QuestRepository {
   Future<AppSnapshot> _save(AppSnapshot state) async {
     final copy = _clone();
     final id = copy['current'];
-    if (id == null) throw const QuestException('领取支线前，请先登录。');
+    if (id == null) throw const QuestException('请先登录，再开始探索。');
     final accounts = _map(copy['accounts']);
     final account = _map(accounts[id]);
     account['state'] = state.toJson();
@@ -154,7 +154,7 @@ class LocalQuestRepository implements QuestRepository {
     await _init();
     var state = _snapshot();
     if (authenticated && state.profile == null) {
-      throw const QuestException('领取支线前，请先登录。');
+      throw const QuestException('请先登录，再开始探索。');
     }
     final today = localDay(_now());
     if (state.day != today) {
@@ -306,16 +306,16 @@ class LocalQuestRepository implements QuestRepository {
     final state = await _current(authenticated: true);
     if (state.activeQuestId != null) return state;
     if (state.canRequestNext) {
-      throw const QuestException('这条支线已完成，想继续的话先发现下一条吧。');
+      throw const QuestException('这次已完成，可以从首页继续探索。');
     }
     return _save(state.copyWith(activeQuestId: state.recommendedQuestId));
   });
   @override
   Future<AppSnapshot> replace() => _serial(() async {
     final state = await _current(authenticated: true);
-    if (state.canRequestNext) throw const QuestException('这条支线已完成，可以发现下一条。');
+    if (state.canRequestNext) throw const QuestException('这次已完成，可以从首页继续探索。');
     if (!state.replacementAvailable) {
-      throw const QuestException('今天的换题机会已用完；不合适的任务随时可以停止。');
+      throw const QuestException('今天已经更换过一次，也可以先放一放。');
     }
     final next = nextQuestId(state.recommendedQuestId);
     return _save(
@@ -336,14 +336,14 @@ class LocalQuestRepository implements QuestRepository {
   Future<AppSnapshot> saveDraft(String text) => _serial(() async {
     _validateText(text);
     final state = await _current(authenticated: true);
-    if (state.activeQuestId == null) throw const QuestException('先领取一条支线再记录吧。');
+    if (state.activeQuestId == null) throw const QuestException('请先开始活动，再写记录。');
     return _save(state.copyWith(draft: text));
   });
   @override
   Future<AppSnapshot> complete(String text) => _serial(() async {
     _validateText(text, required: true);
     final state = await _current(authenticated: true);
-    if (state.activeQuestId == null) throw const QuestException('先领取一条支线再记录吧。');
+    if (state.activeQuestId == null) throw const QuestException('请先开始活动，再写记录。');
     final quest = questById(state.activeQuestId!);
     final entry = JournalEntry(
       id: _randomId(),
@@ -365,7 +365,7 @@ class LocalQuestRepository implements QuestRepository {
   Future<AppSnapshot> nextQuest() => _serial(() async {
     final state = await _current(authenticated: true);
     if (!state.canRequestNext || state.activeQuestId != null) {
-      throw const QuestException('完成当前支线后，才能继续发现下一条。');
+      throw const QuestException('完成当前活动后，可以继续探索。');
     }
     return _save(
       state.copyWith(
