@@ -75,6 +75,8 @@ local.properties
 /server/tmp/
 /.runtime/
 *.sqlite-journal
+*.sqlite.service-lock
+*.db.service-lock
 *.db-wal
 *.db-shm
 *.db-journal

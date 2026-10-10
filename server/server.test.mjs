@@ -250,3 +250,48 @@ test('media directory ownership prevents cross-database reuse and unknown files 
   assert.throws(()=>createApp({databasePath:join(directory,'third.sqlite'),mediaDirectory:existing,mediaProcessor:fakeProcessor}),/已有未识别文件/);
   assert.equal(readFileSync(join(existing,'keep.txt'),'utf8'),'keep');
 });
+
+test('sync-status is read-only, verifies original hashes, and lists missing commands without creating a branch',async(t)=>{
+  const {register,api,sync,app,setTime}=await fixture(t); const {token,state}=(await register()).body;
+  const pending={branchId:'status-only',baseRevision:0,commands:[command('claim',{questId:'green'},'query-claim')]};
+  const before=app.db.prepare('SELECT total_changes() AS n').get().n;
+  const initial=await api('sync-status',pending,token); assert.equal(initial.status,200); assert.equal(initial.body.branchMode,'active'); assert.deepEqual(initial.body.missingCommandIds,['query-claim']); assert.deepEqual(initial.body.receipts,[]);
+  assert.equal(app.db.prepare('SELECT total_changes() AS n').get().n,before); assert.equal(app.db.prepare('SELECT count(*) AS n FROM sync_branches').get().n,0);
+  await sync(token,pending.branchId,pending.baseRevision,pending.commands);
+  const replay=await api('sync-status',pending,token); assert.equal(replay.body.receipts.length,1); assert.deepEqual(replay.body.missingCommandIds,[]);
+  const changed=structuredClone(pending); changed.commands[0].payload.questId='light'; assert.equal((await api('sync-status',changed,token)).status,409);
+  assert.equal((await api('sync-status',{...pending,baseRevision:1},token)).status,409);
+  await api('complete',{text:'完成',clientRecordId:'status-day-record'},token); setTime('2026-10-10T16:01:00.000Z');
+  const beforeDay=app.db.prepare('SELECT * FROM quest_state WHERE user_id=?').get(state.profile.id);
+  const status=await api('sync-status',pending,token); assert.equal(status.status,200); assert.equal(status.body.state.day,'2026-10-10');
+  assert.deepEqual(app.db.prepare('SELECT * FROM quest_state WHERE user_id=?').get(state.profile.id),beforeDay);
+  assert.equal((await api('sync-status',{...pending,commands:Array.from({length:11},()=>command('stop'))},token)).status,400);
+  assert.equal((await api('sync-status',{branchId:'too-large-status',baseRevision:0,commands:Array.from({length:10},(_,i)=>command('complete',completion(`big-status-${i}`,'green','😀'.repeat(500))))},token)).status,413);
+});
+
+test('lost sync response then deletion on another device returns tombstone receipts without reupload or resurrection',async(t)=>{
+  const {register,api,sync,upload,app}=await fixture(t); const {token}=(await register()).body;
+  const second=(await api('login',{nickname:'测试玩家',password})).body.token;
+  const photo=(await upload(token,'image',Buffer.from('original-photo'),'response-lost-photo')).media;
+  const body={branchId:'response-lost-branch',baseRevision:0,commands:[command('claim',{questId:'green'},'lost-claim'),command('complete',completion('lost-record','green','服务器已收到，但客户端未收到回执',[photo.id]),'lost-complete')]};
+  const committed=await sync(token,body.branchId,body.baseRevision,body.commands); assert.equal(committed.status,200);
+  // Simulate a successful commit whose response was never durably recorded by the phone.
+  await api('delete-entry',{id:'lost-record',requestId:'other-device-deletion'},second);
+  assert.equal((await api(`uploads/${photo.id}`,undefined,token)).status,404);
+  const status=await api('sync-status',body,token); assert.equal(status.status,200); assert.deepEqual(status.body.receipts,committed.body.receipts); assert.deepEqual(status.body.missingCommandIds,[]); assert.deepEqual(status.body.entries,[]);
+  const repeated=await sync(token,body.branchId,body.baseRevision,body.commands); assert.equal(repeated.status,200); assert.equal(repeated.body.state.entryCount,0); assert.deepEqual(repeated.body.entries,[]);
+  assert.equal(app.db.prepare('SELECT count(*) AS n FROM media').get().n,0); assert.equal(app.db.prepare('SELECT count(*) AS n FROM entries').get().n,0);
+  const forbidden=structuredClone(body); forbidden.commands[1].payload.mediaIds=[randomUUID()]; assert.equal((await api('sync-status',forbidden,token)).status,409);
+});
+
+test('only an explicitly missing command may replace an expired unbound upload ID before first commit',async(t)=>{
+  const {register,api,sync,upload,setTime,app}=await fixture(t); const {token}=(await register()).body;
+  const original=(await upload(token,'image',Buffer.from('pending-photo'),'expiry-retry-photo')).media;
+  const body={branchId:'never-sent-branch',baseRevision:99,commands:[command('complete',completion('expiry-record','green','离线记录',[original.id]),'expiry-command')]};
+  setTime('2026-10-12T06:00:00.000Z'); app.media.sweep(); assert.equal((await api(`uploads/${original.id}`,undefined,token)).status,404);
+  const status=await api('sync-status',body,token); assert.deepEqual(status.body.missingCommandIds,['expiry-command']); assert.deepEqual(status.body.receipts,[]);
+  const replacement=(await upload(token,'image',Buffer.from('pending-photo'),'expiry-retry-photo')).media; assert.notEqual(replacement.id,original.id);
+  body.commands[0].payload.mediaIds=[replacement.id];
+  const saved=await sync(token,body.branchId,body.baseRevision,body.commands); assert.equal(saved.status,200); assert.equal(saved.body.entries[0].attachments[0].id,replacement.id);
+  assert.equal((await api('sync-status',body,token)).body.missingCommandIds.length,0);
+});

@@ -209,9 +209,9 @@ export class MediaStore {
         this.db.prepare("UPDATE media SET status='ready',content_name=?,thumbnail_name=?,byte_size=?,reserved_bytes=?,mime_type=?,duration_ms=?,width=?,height=?,error=NULL WHERE id=? AND status='processing'")
           .run(contentName, thumbnailName ?? null, byteSize, byteSize + thumbnailBytes, mimeType, durationMs ?? null, width ?? null, height ?? null, row.id);
       }).catch(async (error) => {
-        this.db.prepare("UPDATE media SET status='failed', error=? WHERE id=?").run(error instanceof HttpError ? error.message : '媒体处理失败，请重试', row.id);
         // A failed decode keeps only the retryable reservation, never its large source/partial output files.
         if (existsSync(directory) && dirname(realpathSync(directory)) === this.root) await rm(directory, { recursive: true, force: true }).catch(() => {});
+        this.db.prepare("UPDATE media SET status='failed', error=? WHERE id=?").run(error instanceof HttpError ? error.message : '媒体处理失败，请重试', row.id);
       }).finally(() => { this.activeProcessing.delete(row.id); this.jobs.delete(job); if (!this.closed) { this.processPending(); this.cleanup(); } });
     this.jobs ??= new Set(); this.jobs.add(job);
   }

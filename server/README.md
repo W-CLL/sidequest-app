@@ -45,6 +45,7 @@ Android 模拟器和 USB 真机均可使用 `adb reverse tcp:8787 tcp:8787` 后�
 | `POST /api/preferences` | `role,preferences`，不替换当前活动 |
 | `POST /api/replace` | `{}`，上海自然日每天一次，清空旧草稿和附件关联 |
 | `POST /api/sync` | `branchId,baseRevision,commands`，返回 state、branchMode、receipts、entries |
+| `POST /api/sync-status` | 同一原始 wire 请求，只读返回已有回执、entries 与 missingCommandIds，不执行操作 |
 | `GET /api/entries?q=&cursor=&limit=20` | 按创建时间／ID 倒序，返回 entries、nextCursor、total |
 | `GET /api/entries/:id` | 返回当前账号的单条 entry |
 | `POST /api/update-entry` | `id,text,mediaIds,expectedRevision,requestId` |
@@ -58,6 +59,8 @@ Android 模拟器和 USB 真机均可使用 `adb reverse tcp:8787 tcp:8787` 后�
 `baseRevision` 是分支建立时的版本，此分支后续请求不得改变。服务端持久化最近应用版本；遇到任何云端进度变化，整条旧分支永久转为 `records_only`。有效完成记录继续保存，草稿和活动操作不再改变云端进度。本机未完成草稿由客户端独立保留，而不是覆盖云端草稿。
 
 账号＋clientRecordId、账号＋commandId 分别幂等：响应丢失后重试不会重复记录；相同标识对应不同内容返回 409。记录、附件关联、进度变化与命令回执在同一事务中提交。删除保留墓碑，旧完成命令不能复活记录。一个无效命令会回滚整个批次，不产生部分成功。账号之间允许使用相同 clientRecordId，数据仍隔离。
+
+客户端在首次发送前持久化确切 wire 请求。响应丢失后先以原 payload 查询 `sync-status`，已存在回执时不重新上传或修改媒体 ID；完成回执存在而 entries 中没有该记录，说明它后来已被删除，本机也应终结待同步项。只有明确列在 missingCommandIds 中的操作，才可为过期未绑定媒体重新预约并更新 wire。状态查询不创建分支、不日切、不推进活动；不存在的分支按当前 revision 返回建议模式，真正同步时仍会再次检查冲突。
 
 编辑必须联网且通过 expectedRevision 检查；只有提交成功才解除原附件。取消编辑只删除本次新增且尚未绑定的上传，不影响原记录。退出或失效会话不能读取媒体；本机待传队列的保留及明确放弃由客户端负责。
 

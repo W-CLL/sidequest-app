@@ -144,11 +144,11 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
     if (!state.active_quest_id && state.can_request_next) advance(userId, state);
     db.prepare('UPDATE quest_state SET day=? WHERE user_id=?').run(day, userId);
   }
-  function snapshot(userId = null) {
+  function snapshot(userId = null, { refreshDay = true } = {}) {
     const day = calendarDay(now());
     if (!userId) return { profile: null, activeQuestId: null, recommendedQuestId: quests[0].id, replacedOn: null, draft: '', draftAttachments: [], day,
       canRequestNext: false, progressRevision: 0, recommendationHistory: [], entryCount: 0 };
-    syncDay(userId);
+    if (refreshDay) syncDay(userId);
     const user = db.prepare('SELECT id,nickname,role,preferences FROM users WHERE id=?').get(userId), state = stateRow(userId);
     assert(user && state, 401, '账号已不可用');
     return { profile: { ...user, preferences: JSON.parse(user.preferences) }, activeQuestId: state.active_quest_id, recommendedQuestId: state.recommended_quest_id,
@@ -264,6 +264,35 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
         entries: [...savedIds].map((id) => db.prepare('SELECT * FROM entries WHERE user_id=? AND id=?').get(userId, id)).filter(Boolean).map((row) => entryJson(userId, row)) };
     });
   }
+  function syncStatus(userId, body) {
+    fields(body, ['branchId','baseRevision','commands']);
+    const branchId = identifier(body.branchId, '同步分支');
+    assert(Number.isSafeInteger(body.baseRevision) && body.baseRevision >= 0, 400, '同步版本无效');
+    assert(Array.isArray(body.commands) && body.commands.length >= 1 && body.commands.length <= 10, 400, '每次查询需包含 1–10 项操作');
+    const branch = db.prepare('SELECT * FROM sync_branches WHERE user_id=? AND id=?').get(userId, branchId);
+    if (branch) assert(branch.base_revision === body.baseRevision, 409, '同步分支的起始版本不能改变');
+    // This endpoint is intentionally read-only: even date rollover is deferred
+    // to normal state/sync operations, so recovery queries never advance work.
+    const state = snapshot(userId, { refreshDay: false });
+    const branchMode = branch
+      ? branch.mode === 'records_only' || branch.last_revision !== state.progressRevision ? 'records_only' : 'active'
+      : body.baseRevision === state.progressRevision ? 'active' : 'records_only';
+    const receipts = [], missingCommandIds = [], entryIds = new Set();
+    for (const command of body.commands) {
+      assert(command && typeof command === 'object' && !Array.isArray(command), 400, '同步操作无效');
+      fields(command, ['commandId','type','payload']);
+      const commandId = identifier(command.commandId, '操作标识');
+      assert(['claim','stop','draft','complete','next'].includes(command.type) && command.payload && typeof command.payload === 'object' && !Array.isArray(command.payload), 400, '同步操作无效');
+      const previous = db.prepare('SELECT * FROM command_receipts WHERE user_id=? AND id=?').get(userId, commandId);
+      if (!previous) { missingCommandIds.push(commandId); continue; }
+      const requestHash = hashObject({ branchId, type: command.type, payload: command.payload });
+      assert(previous.request_hash === requestHash, 409, '操作标识已用于其他内容');
+      const receipt = JSON.parse(previous.receipt); receipts.push(receipt);
+      if (receipt.entryId) entryIds.add(receipt.entryId);
+    }
+    return { state, branchMode, receipts, missingCommandIds,
+      entries: [...entryIds].map(id => db.prepare('SELECT * FROM entries WHERE user_id=? AND id=?').get(userId,id)).filter(Boolean).map(row => entryJson(userId,row)) };
+  }
   function mutateEntry(userId, action, body) {
     fields(body, action === 'update-entry' ? ['id','text','mediaIds','expectedRevision','requestId'] : ['id','requestId']);
     const id = identifier(body.id), requestId = identifier(body.requestId, '请求标识'), hash = hashObject({ action, ...body });
@@ -313,7 +342,7 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
       const mediaMatch = /^\/api\/media\/([a-f0-9-]{36})\/(content|thumbnail)$/.exec(pathname);
       if (mediaMatch && ['GET','HEAD'].includes(request.method)) { await media.serve(authenticate(request).id, mediaMatch[1], mediaMatch[2] === 'thumbnail', request, response, allowedOrigin); return; }
       const action = pathname.startsWith('/api/') ? pathname.slice(5) : '';
-      assert(request.method === 'POST' && ['register','login','logout','preferences','replace','delete-account','sync','update-entry','delete-entry','uploads','claim','draft','complete','stop','next'].includes(action), 404, '接口不存在');
+      assert(request.method === 'POST' && ['register','login','logout','preferences','replace','delete-account','sync','sync-status','update-entry','delete-entry','uploads','claim','draft','complete','stop','next'].includes(action), 404, '接口不存在');
       const auth = ['register','login'].includes(action) ? null : authenticate(request);
       const body = await readJson(request);
       if (action === 'register' || action === 'login') {
@@ -337,6 +366,7 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
       }
       if (action === 'uploads') { respond(response, 201, { media: media.reserve(auth.id, body) }, allowedOrigin); return; }
       if (action === 'sync') { const result = synchronize(auth.id, body); media.cleanup(); respond(response, 200, result, allowedOrigin); return; }
+      if (action === 'sync-status') { respond(response, 200, syncStatus(auth.id, body), allowedOrigin); return; }
       if (action === 'update-entry' || action === 'delete-entry') { const result = mutateEntry(auth.id, action, body); media.cleanup(); respond(response, 200, result, allowedOrigin); return; }
       if (action === 'delete-account') {
         fields(body, ['password']); const password = passwordInput(body.password), user = db.prepare('SELECT * FROM users WHERE id=?').get(auth.id);
