@@ -1,0 +1,91 @@
+name: Android alpha APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: 'Optional public HTTPS API base URL; leave blank for device-only alpha'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-alpha-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      API_BASE_URL: ${{ inputs.api_base_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate optional API URL
+        shell: python
+        run: |
+          import ipaddress
+          import os
+          from urllib.parse import urlsplit
+
+          value = os.environ.get('API_BASE_URL', '')
+          if value:
+              if any(c.isspace() or ord(c) < 32 for c in value) or '\\' in value:
+                  raise SystemExit('API URL must not contain whitespace or backslashes.')
+              parsed = urlsplit(value)
+              if (parsed.scheme != 'https' or not parsed.hostname
+                      or parsed.username or parsed.password
+                      or parsed.query or parsed.fragment):
+                  raise SystemExit('Use an HTTPS URL without credentials, query, or fragment.')
+              # Accessing port also validates the port syntax and range.
+              _ = parsed.port
+              if parsed.hostname.lower() == 'localhost' or parsed.hostname.endswith('.local'):
+                  raise SystemExit('CI APKs must not point at localhost or .local hosts.')
+              try:
+                  address = ipaddress.ip_address(parsed.hostname)
+              except ValueError:
+                  pass
+              else:
+                  if not address.is_global:
+                      raise SystemExit('CI APKs require a public HTTPS API address.')
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.0'
+          cache: true
+      - name: Resolve packages
+        run: flutter pub get
+      - name: Analyze
+        run: flutter analyze
+      - name: Test
+        run: flutter test
+      - name: Build debug APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(build apk --debug --split-per-abi)
+          if [[ -n "$API_BASE_URL" ]]; then
+            args+=("--dart-define=API_BASE_URL=$API_BASE_URL")
+          fi
+          flutter "${args[@]}"
+          cd build/app/outputs/flutter-apk
+          sha256sum app-*-debug.apk > SHA256SUMS.txt
+      - name: Upload installable alpha APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidequest-android-alpha-${{ github.run_number }}
+          path: |
+            build/app/outputs/flutter-apk/app-*-debug.apk
+            build/app/outputs/flutter-apk/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
