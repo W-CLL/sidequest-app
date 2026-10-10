@@ -1,210 +1,252 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve, dirname, basename } from 'node:path';
-import { once } from 'node:events';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import { request as httpRequest } from 'node:http';
+import { setTimeout as delay } from 'node:timers/promises';
+import { fixture, password, command, completion, fakeProcessor } from './fixtures.mjs';
 import { createApp } from './server.mjs';
+import { MiB } from './media.mjs';
+import { createBackup, verifyBackup, restoreBackup } from './backup.mjs';
 
-const password = 'Test-Pass-1234';
-
-async function fixture(t, options = {}) {
-  const directory = mkdtempSync(join(tmpdir(), 'sidequest-api-test-'));
-  const databasePath = join(directory, 'test.sqlite');
-  let time = new Date('2026-10-10T06:00:00.000Z');
-  const app = createApp({ databasePath, now: () => time, authLimit: 100, ...options });
-  app.server.listen(0, '127.0.0.1');
-  await once(app.server, 'listening');
-  const base = `http://127.0.0.1:${app.server.address().port}`;
-  t.after(async () => {
-    await app.close();
-    // This exact directory was created by mkdtemp above; never remove its parent.
-    assert.equal(dirname(resolve(directory)), resolve(tmpdir()));
-    assert.ok(basename(directory).startsWith('sidequest-api-test-'));
-    rmSync(directory, { recursive: true, force: true });
-  });
-  async function api(action, body, token, extra = {}) {
-    const response = await fetch(`${base}/api/${action}`, {
-      method: body === undefined ? 'GET' : 'POST',
-      headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(extra.headers ?? {}) },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    return { status: response.status, body: await response.json(), headers: response.headers };
-  }
-  const register = (nickname = '测试玩家') => api('register', { nickname, password, role: 'student', preferences: ['观察细节'] });
-  return { app, api, register, base, setTime: (value) => { time = new Date(value); } };
-}
-
-test('guest state is safe; claiming, private exports, and unsupported uploads require proper requests', async (t) => {
-  const { api } = await fixture(t);
-  const guest = await api('state');
-  assert.equal(guest.status, 200);
-  assert.equal(guest.body.state.profile, null);
-  assert.equal(guest.body.state.recommendedQuestId, 'green');
-  assert.deepEqual(guest.body.state.entries, []);
-  assert.equal(guest.headers.get('cache-control'), 'no-store');
-  assert.equal((await api('claim', {})).status, 401);
-  assert.equal((await api('export')).status, 401);
-  assert.equal((await api('upload', {})).status, 404);
-  assert.equal((await api('health')).body.timezone, 'Asia/Shanghai');
+test('protocol is mandatory; guest state is lightweight; exports are absent', async (t) => {
+  const { api, base } = await fixture(t);
+  assert.equal((await fetch(`${base}/api/state`)).status, 426);
+  const guest = await api('state'); assert.equal(guest.status, 200); assert.equal(guest.body.state.profile, null); assert.equal(guest.body.state.entryCount, 0); assert.equal(guest.body.state.entries, undefined);
+  assert.equal((await api('health', undefined, undefined, { headers: { 'X-Sidequest-Protocol': '1' } })).body.protocolVersion, 2);
+  assert.equal((await api('claim', {})).status, 401); assert.equal((await api('export')).status, 404);
+  assert.equal((await api('state?token=secret')).status, 400); assert.equal(guest.headers.get('cache-control'), 'no-store');
 });
 
-test('atomic normalized nickname uniqueness, stable IDs, salted passwords and hashed-only tokens', async (t) => {
+test('normalized accounts, password hashing and session isolation remain intact', async (t) => {
   const { app, api, register } = await fixture(t);
-  const results = await Promise.all([register('Ａlice'), register('alice')]);
-  assert.deepEqual(results.map((result) => result.status).sort(), [201, 409]);
-  const created = results.find((result) => result.status === 201).body;
-  const row = app.db.prepare('SELECT * FROM users').get();
-  assert.equal(row.normalized_nickname, 'alice');
-  assert.notEqual(row.password_hash, password);
-  assert.equal(row.password_hash.length, 128);
-  assert.equal(row.password_salt.length, 32);
-  const sessions = app.db.prepare('SELECT * FROM sessions').all();
-  assert.equal(sessions.length, 1);
-  assert.equal(sessions[0].token_hash.length, 64);
-  assert.notEqual(sessions[0].token_hash, created.token);
-  const login = await api('login', { nickname: 'ALICE', password });
-  assert.equal(login.status, 200);
-  assert.equal(login.body.state.profile.id, created.state.profile.id);
+  const results = await Promise.all([register('Ａlice'), register('alice')]); assert.deepEqual(results.map((r) => r.status).sort(), [201,409]);
+  const alice = results.find((r) => r.status === 201).body;
+  const row = app.db.prepare('SELECT * FROM users').get(); assert.equal(row.normalized_nickname, 'alice'); assert.equal(row.password_hash.length, 128); assert.equal(row.password_salt.length, 32);
+  const session = app.db.prepare('SELECT * FROM sessions').get(); assert.equal(session.token_hash.length, 64); assert.notEqual(session.token_hash, alice.token);
+  const login = await api('login', { nickname: 'ALICE', password }); assert.equal(login.body.state.profile.id, alice.state.profile.id);
   assert.equal((await api('login', { nickname: 'ALICE', password: 'incorrect-password' })).status, 401);
-  assert.equal((await api('login', { nickname: 'missing', password })).body.error, (await api('login', { nickname: 'ALICE', password: 'incorrect-password' })).body.error);
+  assert.equal((await api('logout', {}, alice.token)).status, 200); assert.equal((await api('state', undefined, alice.token)).status, 401); assert.equal((await api('state', undefined, login.body.token)).status, 200);
 });
 
-test('parallel replacement grants only one per Shanghai day; stop and role changes cannot reroll', async (t) => {
-  const { api, register, setTime } = await fixture(t);
-  const { token } = (await register()).body;
-  assert.equal((await api('claim', {}, token)).body.state.activeQuestId, 'green');
-  await api('draft', { text: '保留这个草稿' }, token);
-  const replacements = await Promise.all([api('replace', {}, token), api('replace', {}, token)]);
-  assert.deepEqual(replacements.map((result) => result.status).sort(), [200, 409]);
-  const replaced = replacements.find((result) => result.status === 200).body.state;
-  assert.equal(replaced.activeQuestId, 'light');
-  assert.equal(replaced.replacedOn, '2026-10-10');
-  assert.equal(replaced.draft, '');
-  await api('draft', { text: '保留新任务的草稿' }, token);
-  await api('preferences', { role: 'leader', preferences: [] }, token);
-  const stopped = (await api('stop', {}, token)).body.state;
-  assert.equal(stopped.activeQuestId, null);
-  assert.equal(stopped.recommendedQuestId, 'light');
-  assert.equal(stopped.draft, '保留新任务的草稿');
-  assert.equal((await api('draft', { text: '停止后不能再修改' }, token)).status, 409);
-  assert.equal((await api('next', {}, token)).status, 409);
-  assert.equal((await api('replace', {}, token)).status, 409);
-  await api('claim', {}, token);
-  setTime('2026-10-10T16:01:00.000Z');
-  const nextDay = (await api('state', undefined, token)).body.state;
-  assert.equal(nextDay.day, '2026-10-11');
-  assert.equal(nextDay.activeQuestId, 'light');
-  assert.equal(nextDay.draft, '保留新任务的草稿');
-  assert.equal((await api('replace', {}, token)).body.state.activeQuestId, 'texture');
+test('offline batch commits once; duplicate IDs with changed content are rejected atomically', async (t) => {
+  const { register, sync, api } = await fixture(t); const { token } = (await register()).body;
+  const commands = [command('claim', { questId: 'green' }, 'claim1'), command('draft', { questId: 'green', text: '我的草稿', mediaIds: [] }, 'draft1'), command('complete', completion('record1'), 'complete1'), command('next', {}, 'next1')];
+  const first = await sync(token, 'device-branch', 0, commands); assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal(first.body.entries.length, 1); assert.equal(first.body.state.entryCount, 1); assert.equal(first.body.state.progressRevision, 4); assert.equal(first.body.branchMode, 'active');
+  const retry = await sync(token, 'device-branch', 0, commands); assert.equal(retry.status, 200); assert.deepEqual(retry.body.receipts, first.body.receipts); assert.equal(retry.body.state.progressRevision, 4);
+  assert.equal((await sync(token, 'device-branch', 4, [command('stop')])).status, 409);
+  const altered = structuredClone(commands); altered[2].payload.text = '恶意改写'; assert.equal((await sync(token, 'device-branch', 0, altered)).status, 409);
+  assert.equal((await api('entries/record1', undefined, token)).body.entry.text, '记录内容');
 });
 
-test('completion is atomic, next is voluntary, deletion cannot reset progression', async (t) => {
-  const { api, register } = await fixture(t);
-  const { token } = (await register()).body;
-  await api('claim', {}, token);
-  const completions = await Promise.all([api('complete', { text: '看见了三种绿色。' }, token), api('complete', { text: '重复' }, token)]);
-  assert.deepEqual(completions.map((result) => result.status).sort(), [200, 409]);
-  const completed = (await api('state', undefined, token)).body.state;
-  assert.equal(completed.activeQuestId, null);
-  assert.equal(completed.canRequestNext, true);
-  assert.equal(completed.entries.length, 1);
-  assert.equal(completed.entries[0].questTitle, '三种绿色');
-  assert.equal((await api('claim', {}, token)).status, 409);
-  assert.equal((await api('replace', {}, token)).status, 409);
-  const deleted = (await api('delete-entry', { id: completed.entries[0].id }, token)).body.state;
-  assert.equal(deleted.entries.length, 0);
-  assert.equal(deleted.canRequestNext, true);
-  const next = (await api('next', {}, token)).body.state;
-  assert.equal(next.recommendedQuestId, 'light');
-  assert.equal(next.activeQuestId, null);
-  assert.equal(next.canRequestNext, false);
-  assert.equal((await api('next', {}, token)).status, 409);
+test('conflicting devices save every completed record without overwriting cloud draft, permanently', async (t) => {
+  const { register, sync } = await fixture(t); const { token } = (await register()).body;
+  const cloud = await sync(token, 'cloud', 0, [command('claim', { questId: 'green' }), command('draft', { questId: 'green', text: '云端草稿', mediaIds: [] })]); assert.equal(cloud.status, 200);
+  const offline = await sync(token, 'offline', 0, [command('claim', { questId: 'green' }), command('complete', completion('offline1')), command('next'), command('claim', { questId: 'light' }), command('complete', completion('offline2', 'light'))]);
+  assert.equal(offline.status, 200, JSON.stringify(offline.body)); assert.equal(offline.body.branchMode, 'records_only'); assert.equal(offline.body.entries.length, 2);
+  assert.equal(offline.body.state.draft, '云端草稿'); assert.equal(offline.body.state.activeQuestId, 'green'); assert.equal(offline.body.state.progressRevision, 2);
+  const later = await sync(token, 'offline', 0, [command('draft', { questId: 'light', text: '旧分支草稿', mediaIds: [] }), command('complete', completion('offline3', 'texture'))]);
+  assert.equal(later.body.branchMode, 'records_only'); assert.equal(later.body.state.draft, '云端草稿'); assert.equal(later.body.state.entryCount, 3); assert.ok(later.body.receipts.every((r) => !r.progressApplied));
 });
 
-test('day rollover after completion advances once, and drafts require an active quest', async (t) => {
-  const { api, register, setTime } = await fixture(t);
-  const { token } = (await register()).body;
-  await api('claim', {}, token);
-  await api('complete', { text: '完成' }, token);
-  assert.equal((await api('draft', { text: '下一次的想法' }, token)).status, 409);
-  setTime('2026-10-10T16:00:00.000Z');
-  const state = (await api('state', undefined, token)).body.state;
-  assert.equal(state.recommendedQuestId, 'light');
-  assert.equal(state.canRequestNext, false);
-  assert.equal(state.draft, '');
-  assert.equal((await api('state', undefined, token)).body.state.recommendedQuestId, 'light');
+test('existing branch becomes records-only after another device changes canonical progress', async (t) => {
+  const { register, sync, api } = await fixture(t); const { token } = (await register()).body;
+  await sync(token, 'phone-a', 0, [command('claim', { questId: 'green' })]);
+  await api('draft', { text: '云端更新' }, token);
+  const result = await sync(token, 'phone-a', 0, [command('complete', completion('late-record'))]);
+  assert.equal(result.body.branchMode, 'records_only'); assert.equal(result.body.state.draft, '云端更新'); assert.equal(result.body.state.entryCount, 1);
 });
 
-test('journal entries are oldest first, including equal timestamp completions; claim is idempotent', async (t) => {
-  const { api, register } = await fixture(t);
-  const { token } = (await register()).body;
-  assert.equal((await api('draft', { text: '未领取' }, token)).status, 409);
-  const firstClaim = (await api('claim', {}, token)).body.state;
-  assert.deepEqual((await api('claim', {}, token)).body.state, firstClaim);
-  await api('complete', { text: '第一篇' }, token);
-  await api('next', {}, token);
-  await api('claim', {}, token);
-  const state = (await api('complete', { text: '第二篇' }, token)).body.state;
-  assert.deepEqual(state.entries.map((entry) => entry.text), ['第一篇', '第二篇']);
-  assert.deepEqual(state.entries.map((entry) => entry.questId), ['green', 'light']);
+test('pagination is stable on equal times, search handles Unicode and literal wildcards, private detail is isolated', async (t) => {
+  const { register, sync, api } = await fixture(t); const alice = (await register('Alice')).body, bob = (await register('Bob')).body;
+  await sync(alice.token, 'old-branch', 99, [command('complete', completion('record-a', 'green', '中文😀 100% Apple')), command('complete', completion('record-b', 'light', '中文😀')), command('complete', completion('record-c', 'texture', 'other'))]);
+  const page = await api('entries?limit=1', undefined, alice.token); assert.equal(page.body.entries[0].id, 'record-c'); assert.equal(page.body.total, 3);
+  const second = await api(`entries?limit=1&cursor=${encodeURIComponent(page.body.nextCursor)}`, undefined, alice.token); assert.equal(second.body.entries[0].id, 'record-b');
+  assert.equal((await api('entries?q=apple', undefined, alice.token)).body.total, 1); assert.equal((await api('entries?q=%25', undefined, alice.token)).body.total, 1);
+  assert.equal((await api(`entries?q=${encodeURIComponent(' 中文😀 ')}`, undefined, alice.token)).body.total, 2);
+  assert.equal((await api('entries/record-a', undefined, bob.token)).status, 404); assert.equal((await api('entries', undefined, bob.token)).body.total, 0);
 });
 
-test('private records are isolated, exports contain no secrets, and deletion cascades', async (t) => {
-  const { app, api, register } = await fixture(t);
-  const alice = (await register('Alice')).body;
-  const bob = (await register('Bob')).body;
-  await api('claim', {}, alice.token);
-  const entry = (await api('complete', { text: '我的私密记录' }, alice.token)).body.state.entries[0];
-  assert.equal((await api('delete-entry', { id: entry.id }, bob.token)).status, 404);
-  assert.deepEqual((await api('state', undefined, bob.token)).body.state.entries, []);
-  const exported = await api('export', undefined, alice.token);
-  assert.equal(exported.body.state.entries[0].text, '我的私密记录');
-  assert.ok(!JSON.stringify(exported.body).includes('password'));
-  assert.ok(!JSON.stringify(exported.body).includes(alice.token));
-  assert.equal((await api('delete-account', { password: 'wrong-password' }, alice.token)).status, 401);
-  assert.equal((await api('delete-account', { password }, alice.token)).status, 200);
-  assert.equal((await api('state', undefined, alice.token)).status, 401);
-  assert.equal(app.db.prepare('SELECT count(*) AS count FROM entries').get().count, 0);
-  assert.equal(app.db.prepare('SELECT count(*) AS count FROM quest_state').get().count, 1);
-  assert.equal(app.db.prepare('SELECT count(*) AS count FROM sessions').get().count, 1);
-  assert.equal((await register('alice')).status, 201);
+test('record edit uses revision and idempotency; tombstones prevent resurrection', async (t) => {
+  const { register, sync, api } = await fixture(t); const { token } = (await register()).body; const original = completion('edit-record');
+  const complete = command('complete', original, 'original-complete'); await sync(token, 'offline', 10, [complete]);
+  const edited = { id: 'edit-record', text: '修改后', mediaIds: [], expectedRevision: 1, requestId: 'edit-request' };
+  const first = await api('update-entry', edited, token); assert.equal(first.status, 200); assert.equal(first.body.entry.revision, 2); assert.equal(first.body.entry.createdAt, original.createdAt);
+  assert.deepEqual((await api('update-entry', edited, token)).body.entry, first.body.entry);
+  assert.equal((await api('update-entry', { ...edited, requestId: 'another-request' }, token)).status, 409);
+  await api('delete-entry', { id: 'edit-record', requestId: 'delete-request' }, token);
+  const retry = await sync(token, 'offline', 10, [complete]); assert.equal(retry.status, 200); assert.equal(retry.body.entries.length, 0);
+  const freshCommand = await sync(token, 'offline', 10, [command('complete', original)]); assert.equal(freshCommand.status, 200); assert.equal(freshCommand.body.state.entryCount, 0);
 });
 
-test('logout revokes only its session, expiration rejects stale tokens', async (t) => {
-  const { api, register, setTime } = await fixture(t);
-  const { token } = (await register()).body;
-  const second = (await api('login', { nickname: '测试玩家', password })).body.token;
-  assert.equal((await api('logout', {}, token)).body.state.profile, null);
-  assert.equal((await api('state', undefined, token)).status, 401);
-  assert.equal((await api('state', undefined, second)).status, 200);
-  setTime('2026-10-18T06:00:00.000Z');
-  assert.equal((await api('state', undefined, second)).status, 401);
+test('media reservation retry, authenticated ranges, draft retention, and committed cleanup', async (t) => {
+  const { register, upload, api, base, app } = await fixture(t); const alice = (await register('Alice')).body, bob = (await register('Bob')).body;
+  const result = await upload(alice.token, 'image', Buffer.from('abcdefghijklmnop'), 'stable-upload'); assert.equal(result.media.status, 'ready');
+  const id = result.media.id;
+  assert.equal((await api('uploads', { kind: 'image', byteSize: 16, clientUploadId: 'stable-upload' }, alice.token)).body.media.id, id);
+  assert.equal((await api('uploads', { kind: 'image', byteSize: 17, clientUploadId: 'stable-upload' }, alice.token)).status, 409);
+  assert.equal((await api(`uploads/${id}`, undefined, bob.token)).status, 404);
+  const headers = { Authorization: `Bearer ${alice.token}`, 'X-Sidequest-Protocol': '2' };
+  const part = await fetch(`${base}/api/media/${id}/content`, { headers: { ...headers, Range: 'bytes=2-5' } }); assert.equal(part.status, 206); assert.equal(await part.text(), 'cdef'); assert.equal(part.headers.get('content-range'), 'bytes 2-5/16');
+  assert.equal((await fetch(`${base}/api/media/${id}/content`, { headers: { ...headers, Range: 'bytes=999-' } })).status, 416);
+  assert.equal((await fetch(`${base}/api/media/${id}/content`, { headers: { ...headers, Range: 'bytes=0-1,3-4' } })).status, 416);
+  assert.equal((await fetch(`${base}/api/media/${id}/content`, { method: 'HEAD', headers })).headers.get('content-length'), '16');
+  await api('claim', {}, alice.token); await api('draft', { text: '草稿', mediaIds: [id] }, alice.token); await api('stop', {}, alice.token);
+  assert.equal((await api('state', undefined, alice.token)).body.state.draftAttachments[0].id, id);
+  assert.equal((await api(`uploads/${id}`, undefined, alice.token, { method: 'DELETE' })).status, 409);
+  await api('claim', {}, alice.token); const complete = await api('complete', { text: '完成', mediaIds: [id], clientRecordId: 'media-record' }, alice.token); assert.equal(complete.status, 200, JSON.stringify(complete.body));
+  assert.equal(complete.body.entry.attachments[0].id, id); assert.equal(complete.body.state.draftAttachments.length, 0);
+  const editMedia = await upload(alice.token, 'video'); await api(`uploads/${editMedia.media.id}`, undefined, alice.token, { method: 'DELETE' });
+  assert.equal((await api('entries/media-record', undefined, alice.token)).body.entry.attachments[0].id, id);
+  await api('delete-entry', { id: 'media-record', requestId: 'delete-media-record' }, alice.token);
+  assert.equal((await api(`uploads/${id}`, undefined, alice.token)).status, 404); assert.equal(existsSync(app.media.directory(id)), false);
 });
 
-test('validation uses Unicode codepoints, rejects unsupported media and oversized JSON', async (t) => {
-  const { api, register } = await fixture(t);
-  assert.equal((await api('register', { nickname: 'a', password, role: 'student' })).status, 400);
-  assert.equal((await api('register', { nickname: 'valid', password: 'short', role: 'student' })).status, 400);
-  assert.equal((await api('register', { nickname: 'valid', password, role: 'invented' })).status, 400);
-  const { token } = (await register()).body;
-  await api('claim', {}, token);
-  assert.equal((await api('complete', { text: '  ' }, token)).status, 400);
-  assert.equal((await api('draft', { text: '😀'.repeat(300) }, token)).status, 200);
-  assert.equal((await api('complete', { text: '😀'.repeat(301) }, token)).status, 400);
-  assert.equal((await api('complete', { text: '图片', media: [] }, token)).status, 400);
-  assert.equal((await api('draft', { text: 'x'.repeat(17000) }, token)).status, 413);
-  assert.equal((await api('complete', { text: '😀'.repeat(300) }, token)).status, 200);
+test('media limits, ownership, cancellation, and expiration exclude referenced drafts', async (t) => {
+  const { register, api, upload, app, setTime } = await fixture(t); const alice = (await register('Alice')).body, bob = (await register('Bob')).body;
+  assert.equal((await api('uploads', { kind: 'video', byteSize: 50*MiB+1, clientUploadId: 'too-large' }, alice.token)).status, 413);
+  const first = (await upload(alice.token)).media; await api('claim', {}, alice.token);
+  assert.equal((await api('draft', { text: '偷附件', mediaIds: [first.id] }, bob.token)).status, 400);
+  await api('claim', {}, bob.token); assert.equal((await api('draft', { text: '偷附件', mediaIds: [first.id] }, bob.token)).status, 404);
+  await api('draft', { text: '保留', mediaIds: [first.id] }, alice.token); await api('stop', {}, alice.token);
+  const orphan = (await upload(alice.token)).media;
+  setTime('2026-10-12T06:00:00.000Z'); app.media.sweep();
+  assert.equal((await api(`uploads/${first.id}`, undefined, alice.token)).status, 200); assert.equal((await api(`uploads/${orphan.id}`, undefined, alice.token)).status, 404);
+  const tooMany = [];
+  for (let i=0;i<6;i++) tooMany.push((await upload(alice.token)).media.id);
+  await api('claim', {}, alice.token); assert.equal((await api('complete', { text: '太多图片', mediaIds: tooMany }, alice.token)).status, 400);
+  assert.equal((await api('state', undefined, alice.token)).body.state.entryCount, 0);
 });
 
-test('origin checks and auth throttling are enforced without trusting forwarded IP headers', async (t) => {
-  const { api, register } = await fixture(t, { authLimit: 2, allowedOrigins: ['https://trusted.example'] });
+test('quota reservation includes pending output, and record cap is enforced', async (t) => {
+  const { register, api, app } = await fixture(t, { accountMediaLimit: 7*MiB }); const { token, state } = (await register()).body;
+  assert.equal((await api('uploads', { kind: 'video', byteSize: 1, clientUploadId: 'no-room' }, token)).status, 413);
+  const id = randomUUID(); app.db.prepare("INSERT INTO media(id,user_id,client_upload_id,kind,status,source_bytes,reserved_bytes,byte_size,mime_type,created_at) VALUES(?,?,?,'video','ready',1,1,?,'video/mp4',0)").run(id,state.profile.id,'oversized-fixture',46*MiB);
+  await api('claim', {}, token); assert.equal((await api('complete', { text: '超限', mediaIds: [id] }, token)).status, 413);
+});
+
+test('parallel replacement permits one Shanghai day, pause retains draft, day roll cannot reroll active work', async (t) => {
+  const { register, api, setTime } = await fixture(t); const { token } = (await register()).body;
+  await api('claim', {}, token); await api('draft', { text: '初稿' }, token);
+  const replacements = await Promise.all([api('replace', {}, token), api('replace', {}, token)]); assert.deepEqual(replacements.map((r) => r.status).sort(), [200,409]);
+  const current = replacements.find((r) => r.status === 200).body.state; assert.equal(current.draft, '');
+  await api('draft', { text: '留下' }, token); await api('stop', {}, token); setTime('2026-10-10T16:01:00.000Z');
+  const state = (await api('state', undefined, token)).body.state; assert.equal(state.recommendedQuestId, current.recommendedQuestId); assert.equal(state.draft, '留下'); assert.equal(state.day, '2026-10-11');
+});
+
+test('Unicode 500 boundary, oversized JSON, and invalid batches cannot partially commit', async (t) => {
+  const { register, api, sync } = await fixture(t); const { token } = (await register()).body;
+  assert.equal((await sync(token, 'invalid', 10, [command('complete', completion('good')), command('complete', completion('bad', 'green', ' '))])).status, 400);
+  assert.equal((await api('entries', undefined, token)).body.total, 0);
+  await api('claim', {}, token); assert.equal((await api('draft', { text: '😀'.repeat(500) }, token)).status, 200); assert.equal((await api('complete', { text: '😀'.repeat(501) }, token)).status, 400);
+  assert.equal((await api('draft', { text: 'x'.repeat(17000) }, token)).status, 413); assert.equal((await api('complete', { text: '😀'.repeat(500) }, token)).status, 200);
+  assert.equal((await sync(token, 'big-batch', 10, Array.from({length:11},()=>command('stop')))).status, 400);
+});
+
+test('account deletion invalidates sessions and persists file cleanup independent of user cascade', async (t) => {
+  const { register, api, upload, app } = await fixture(t); const { token } = (await register()).body; const photo = (await upload(token)).media;
+  await api('claim', {}, token); await api('draft', { text: '草稿', mediaIds: [photo.id] }, token);
+  assert.equal((await api('delete-account', { password: 'incorrect-password' }, token)).status, 401);
+  const oldCleanup = app.media.cleanup; app.media.cleanup = () => {};
+  assert.equal((await api('delete-account', { password }, token)).status, 200); assert.equal(app.db.prepare('SELECT count(*) AS n FROM media_cleanup').get().n, 1);
+  assert.equal((await api('state', undefined, token)).status, 401); assert.equal(app.db.prepare('SELECT count(*) AS n FROM media').get().n, 0);
+  app.media.cleanup = oldCleanup; app.media.cleanup(); assert.equal(existsSync(app.media.directory(photo.id)), false);
+});
+
+test('origin checks, throttling, and expiry reject unauthorized access', async (t) => {
+  const { register, api, setTime } = await fixture(t, { authLimit: 2, allowedOrigins: ['https://trusted.example'] });
   assert.equal((await api('health', undefined, undefined, { headers: { Origin: 'https://evil.example' } })).status, 403);
-  const allowed = await api('health', undefined, undefined, { headers: { Origin: 'https://trusted.example' } });
-  assert.equal(allowed.headers.get('access-control-allow-origin'), 'https://trusted.example');
-  assert.equal((await register()).status, 201);
-  assert.equal((await api('login', { nickname: '测试玩家', password: 'wrong-password' })).status, 401);
-  const limited = await api('login', { nickname: '测试玩家', password }, undefined, { headers: { 'X-Forwarded-For': '1.2.3.4' } });
-  assert.equal(limited.status, 429);
-  assert.equal(limited.headers.get('retry-after'), '900');
+  assert.equal((await api('health', undefined, undefined, { headers: { Origin: 'https://trusted.example' } })).headers.get('access-control-allow-origin'), 'https://trusted.example');
+  const { token } = (await register()).body; await api('login', { nickname: '测试玩家', password: 'bad-password' }); assert.equal((await api('login', { nickname: '测试玩家', password }, undefined, { headers: { 'X-Forwarded-For': '1.2.3.4' } })).status, 429);
+  setTime('2026-10-18T06:00:00.000Z'); assert.equal((await api('state', undefined, token)).status, 401);
+});
+
+test('backup refuses running service and existing destinations, restores database and files together', async (t) => {
+  const { register, upload, api, app, directory } = await fixture(t); const { token } = (await register()).body; const photo = (await upload(token)).media;
+  await api('claim', {}, token); await api('complete', { text: '备份记录', mediaIds: [photo.id], clientRecordId: 'backup-record' }, token);
+  const options = { databasePath: join(directory,'test.sqlite'), mediaDirectory: join(directory,'media'), destination: join(directory,'backup') };
+  await assert.rejects(createBackup(options), /in use/); await app.close();
+  const backup = await createBackup(options); assert.ok(backup.files >= 3); verifyBackup(options.destination); await assert.rejects(createBackup(options), /already exists/);
+  const restored = restoreBackup({ source: options.destination, destination: join(directory,'restored') });
+  const server = createApp({ ...restored, mediaProcessor: fakeProcessor });
+  assert.equal(server.db.prepare("SELECT text FROM entries WHERE id='backup-record'").get().text, '备份记录'); assert.ok(existsSync(join(restored.mediaDirectory,photo.id,'content.jpg'))); await server.close();
+  writeFileSync(join(options.destination,'media',photo.id,'content.jpg'),'broken'); assert.throws(() => verifyBackup(options.destination), /verification failed/);
+});
+
+test('v1 database is rejected without migrating or changing its schema or bytes', async (t) => {
+  const { app, directory } = await fixture(t); await app.close();
+  const path = join(directory,'v1.sqlite'); const db = new DatabaseSync(path);
+  db.exec("CREATE TABLE users(id TEXT PRIMARY KEY,nickname TEXT NOT NULL,normalized_nickname TEXT NOT NULL UNIQUE,password_salt TEXT NOT NULL,password_hash TEXT NOT NULL,role TEXT NOT NULL,preferences TEXT NOT NULL); CREATE TABLE quest_state(user_id TEXT PRIMARY KEY REFERENCES users(id),active_quest_id TEXT,recommended_quest_id TEXT NOT NULL DEFAULT 'green',replaced_on TEXT,draft TEXT NOT NULL DEFAULT '',day TEXT NOT NULL,can_request_next INTEGER NOT NULL DEFAULT 0); CREATE TABLE entries(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),quest_id TEXT NOT NULL,quest_title TEXT NOT NULL,text TEXT NOT NULL,created_at TEXT NOT NULL); INSERT INTO users VALUES('old','Old','old','salt','hash','student','[]'); INSERT INTO quest_state(user_id,day) VALUES('old','2026-10-10'); INSERT INTO entries VALUES('old-entry','old','green','三种绿色','旧记录','2026-10-10T00:00:00.000Z');"); db.close();
+  const before=readFileSync(path);
+  for (let i=0;i<2;i++) assert.throws(()=>createApp({databasePath:path,mediaDirectory:join(directory,'v1-media'),mediaProcessor:fakeProcessor}),/No migration/);
+  assert.deepEqual(readFileSync(path),before);
+  const original=new DatabaseSync(path,{readOnly:true});
+  assert.equal(original.prepare("SELECT password_hash FROM users WHERE id='old'").get().password_hash,'hash');
+  assert.equal(original.prepare('PRAGMA table_info(entries)').all().some(column=>column.name==='revision'),false);
+  assert.equal(original.prepare("SELECT text FROM entries WHERE id='old-entry'").get().text,'旧记录'); original.close();
+});
+
+test('cleanup survives process restart and only touches registered private media directories', async (t) => {
+  const { app, directory } = await fixture(t); const orphan = randomUUID(); mkdirSync(join(directory,'media',orphan)); writeFileSync(join(directory,'media',orphan,'source.part'),'partial');
+  app.db.prepare('INSERT INTO media_cleanup(media_id,created_at) VALUES(?,0)').run(orphan); await app.close();
+  const reopened = createApp({ databasePath:join(directory,'test.sqlite'),mediaDirectory:join(directory,'media'),mediaProcessor:fakeProcessor }); assert.equal(existsSync(join(directory,'media',orphan)),false); await reopened.close();
+});
+
+test('canceling or deleting an account during processing cannot resurrect ready media', async (t) => {
+  let release;
+  const gate = new Promise(resolve => { release=resolve; });
+  const processor = { async process(...args) { await gate; return fakeProcessor.process(...args); } };
+  const {register,api,base,app} = await fixture(t,{mediaProcessor:processor}); const {token}=(await register()).body;
+  const reserved=await api('uploads',{kind:'image',byteSize:4,clientUploadId:'cancel-during-process'},token); const id=reserved.body.media.id;
+  const uploaded=await fetch(`${base}/api/uploads/${id}/content`,{method:'PUT',headers:{'X-Sidequest-Protocol':'2',Authorization:`Bearer ${token}`},body:Buffer.from('abcd')}); assert.equal(uploaded.status,200); await uploaded.json();
+  assert.equal((await api(`uploads/${id}`,undefined,token,{method:'DELETE'})).status,200); assert.equal(app.db.prepare('SELECT count(*) AS n FROM media_cleanup').get().n,1);
+  release();
+  for(let i=0;i<100 && app.media.activeProcessing.size;i++) await delay(10);
+  assert.equal((await api(`uploads/${id}`,undefined,token)).status,404); assert.equal(existsSync(app.media.directory(id)),false); assert.equal(app.db.prepare('SELECT count(*) AS n FROM media_cleanup').get().n,0);
+});
+
+test('interrupted upload removes partial bytes and can retry with the same reservation', async (t) => {
+  const {register,api,base,app}=await fixture(t); const {token}=(await register()).body;
+  const reserved=await api('uploads',{kind:'image',byteSize:100,clientUploadId:'interrupted'},token); const id=reserved.body.media.id;
+  const request=httpRequest(`${base}/api/uploads/${id}/content`,{method:'PUT',headers:{'X-Sidequest-Protocol':'2',Authorization:`Bearer ${token}`,'Content-Length':100}});
+  request.on('error',()=>{}); request.write(Buffer.alloc(40));
+  for(let i=0;i<100 && !app.media.activeUploads.has(id);i++) await delay(10);
+  request.destroy();
+  for(let i=0;i<100 && app.media.activeUploads.has(id);i++) await delay(10);
+  assert.equal((await api(`uploads/${id}`,undefined,token)).body.media.status,'failed'); assert.equal(existsSync(join(app.media.directory(id),'source.part')),false);
+  const retried=await fetch(`${base}/api/uploads/${id}/content`,{method:'PUT',headers:{'X-Sidequest-Protocol':'2',Authorization:`Bearer ${token}`},body:Buffer.alloc(100)}); assert.equal(retried.status,200); await retried.json();
+  for(let i=0;i<100 && app.media.activeProcessing.size;i++) await delay(10);
+  assert.equal((await api(`uploads/${id}`,undefined,token)).body.media.status,'ready');
+});
+
+test('sync rejects more than 16KiB even within ten-command limit without partial state', async(t)=>{
+  const {register,sync,api}=await fixture(t); const {token}=(await register()).body;
+  const commands=Array.from({length:10},(_,i)=>command('complete',completion(`large-${i}`,'green','😀'.repeat(500))));
+  assert.equal((await sync(token,'large-json',999,commands)).status,413); assert.equal((await api('entries',undefined,token)).body.total,0);
+});
+
+test('client record IDs are scoped to accounts, but changed content in one account conflicts',async(t)=>{
+  const {register,sync,api}=await fixture(t); const alice=(await register('Alice')).body,bob=(await register('Bob')).body;
+  const a=await sync(alice.token,'branch',999,[command('complete',completion('same-id','green','Alice记录'))]);
+  const b=await sync(bob.token,'branch',999,[command('complete',completion('same-id','green','Bob记录'))]);
+  assert.equal(a.status,200); assert.equal(b.status,200);
+  assert.equal((await api('entries/same-id',undefined,alice.token)).body.entry.text,'Alice记录');
+  assert.equal((await api('entries/same-id',undefined,bob.token)).body.entry.text,'Bob记录');
+  assert.equal((await sync(alice.token,'branch',999,[command('complete',completion('same-id','green','changed'))])).status,409);
+  await api('delete-entry',{id:'same-id',requestId:'delete-same'},alice.token);
+  assert.equal((await api('entries/same-id',undefined,bob.token)).status,200);
+});
+
+test('media directory ownership prevents cross-database reuse and unknown files are preserved',async(t)=>{
+  const {app,directory}=await fixture(t);
+  const unrelated=randomUUID(); mkdirSync(join(directory,'media',unrelated)); writeFileSync(join(directory,'media',unrelated,'keep.txt'),'unrelated');
+  app.media.sweep(); assert.equal(readFileSync(join(directory,'media',unrelated,'keep.txt'),'utf8'),'unrelated');
+  assert.throws(()=>createApp({databasePath:join(directory,'other.sqlite'),mediaDirectory:join(directory,'media'),mediaProcessor:fakeProcessor}),/另一个数据库/);
+  assert.equal(readFileSync(join(directory,'media',unrelated,'keep.txt'),'utf8'),'unrelated');
+  const existing=join(directory,'unmarked'); mkdirSync(existing); writeFileSync(join(existing,'keep.txt'),'keep');
+  assert.throws(()=>createApp({databasePath:join(directory,'third.sqlite'),mediaDirectory:existing,mediaProcessor:fakeProcessor}),/已有未识别文件/);
+  assert.equal(readFileSync(join(existing,'keep.txt'),'utf8'),'keep');
 });

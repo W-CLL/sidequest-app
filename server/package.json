@@ -1,9 +1,9 @@
 {
   "name": "sidequest-private-api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Self-hosted text-only Side Quest alpha API",
+  "description": "Private Sidequest v2 account, offline sync and multimedia API",
   "engines": { "node": ">=24.0.0 <25" },
   "scripts": { "start": "node server.mjs", "test": "node --test" }
 }

@@ -66,3 +66,15 @@ local.properties
 *.apk
 *.aab
 /artifacts/
+/data/
+/media/
+/backups/
+/server/data/
+/server/media/
+/server/backups/
+/server/tmp/
+/.runtime/
+*.sqlite-journal
+*.db-wal
+*.db-shm
+*.db-journal

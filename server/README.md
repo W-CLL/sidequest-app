@@ -1,111 +1,103 @@
-# 支线 API：文字内测版
+# 支线 API v0.2：账号、离线记录同步与私有媒体
 
-这是可自行部署的后端源代码，不代表已经上线。采用 Node.js 24 内置 HTTP、SQLite 和加密模块，没有 npm 运行依赖。连接同一个持久化数据库的客户端共享唯一昵称与私密账号数据；仅在手机本地运行的演示模式不具备跨设备昵称唯一性。
+本轮交付完整服务与本地联调，不代表已部署公网。服务使用 Node.js 24 内置 HTTP、SQLite、加密模块；FFmpeg / ffprobe 是必须安装的外部运行依赖。服务端数据库是已保存账号、记录和当前活动的权威来源；手机仅持久化待同步记录、待传文件与冲突草稿。不提供用户 JSON 导入、导出或账号迁移。
 
-## 本地启动
+## 本地运行
 
-先安装 Node.js 24，在本目录运行：
+安装 Node.js 24 和含 `libx264`、`mjpeg`、`aac` 编码器的 FFmpeg。启动会检查真实可执行文件，不会绕过校验。默认从 PATH 寻找；也可仅为当前进程指定工具绝对路径。
 
-```sh
+```powershell
+$env:FFMPEG_PATH='C:\path\to\ffmpeg.exe'
+$env:FFPROBE_PATH='C:\path\to\ffprobe.exe'
 node --test
 node server.mjs
 ```
 
-默认监听 `127.0.0.1:8787`，数据库为相对于工作目录的 `data/sidequest.sqlite`。健康检查：`GET http://127.0.0.1:8787/api/health`。测试使用临时数据库，完成后清理，不读取实际账号库。
+在 `server/` 目录执行。默认只监听 `127.0.0.1:8787`，采用独立的 `data/sidequest-v2.sqlite` 和 `data/media/`。`GET /api/health` 返回协议版本 2 及媒体工具可用状态。
 
-| 环境变量 | 默认值 | 说明 |
+| 配置 | 默认值 | 含义 |
 | --- | --- | --- |
-| `HOST` | `127.0.0.1` | 不默认向公网或局域网暴露 |
-| `PORT` | `8787` | 监听端口 |
-| `DATABASE_PATH` | `./data/sidequest.sqlite` | 持久化 SQLite 路径，建议部署时使用绝对路径 |
-| `ALLOWED_ORIGINS` | 空 | 浏览器来源白名单，逗号分隔，例如 `https://preview.example.com`；不使用通配符 |
+| `HOST` / `PORT` | `127.0.0.1` / `8787` | 本地监听地址 |
+| `DATABASE_PATH` | `./data/sidequest-v2.sqlite` | v2 持久化数据库路径 |
+| `MEDIA_DIRECTORY` | 数据库目录下的 `media` | 私有持久媒体目录，不是公共静态目录 |
+| `FFMPEG_PATH` / `FFPROBE_PATH` | `ffmpeg` / `ffprobe` | 媒体处理工具路径 |
+| `ALLOWED_ORIGINS` | 空 | 精确浏览器来源白名单，逗号分隔；原生客户端不需要 Origin |
 
-正式远程访问必须放在 HTTPS 反向代理后，客户端构建时设 `--dart-define=API_BASE_URL=https://api.your-domain.example`，不要在 URL 后加 `/api`。原生手机应用不发送浏览器 Origin，浏览器联调则必须显式配置精确来源。
+只初始化空数据库或打开明确标记为 v2 的数据库。检测到旧版或未标记的已有数据库时，在只读检查后拒绝启动，提示使用新路径；不迁移、覆盖或删除旧库。旧客户端的本机数据也不会上传或删除。
 
-本地 Android 模拟器访问宿主机通常用 `http://10.0.2.2:8787`。实体 Android 通过 USB 连到开发机时，可使用 `adb reverse tcp:8787 tcp:8787` 再连接 `http://127.0.0.1:8787`。这两种明文地址仅用于开发测试，不应在不可信网络使用；客户端也需要仅开发配置允许明文。不要使用真实敏感记录测试明文连接。
+同一数据库只允许一个服务进程。旁边的 `.service-lock` 用于阻止重复启动及运行期间备份；正常停止后自动移除，异常退出后仅在确认旧进程不存在时清理这个确切锁文件。
 
-## 试运行部署
+媒体目录的 `.sidequest-media-owner` 与数据库绑定，不能让两个数据库复用同一媒体目录；非空但没有归属标记的目录会被拒绝，现有文件保持不变。清理器仅处理数据库明确登记的附件，不猜测或删除未知子目录。
 
-1. 使用带持久磁盘的单个 Node.js 24 服务进程，为该服务分配低权限系统账号。设置数据库目录所有者及访问权限；Windows 需另外配置 NTFS ACL。
-2. 将数据库及其目录排除在 Git、公共文件服务器和日志采集之外。不要把容器临时文件系统当成持久盘。
-3. 让 HTTPS 反向代理将请求转发到环回地址 `127.0.0.1:8787`，限制请求体不超过 16 KiB，配置连接/请求超时，并额外提供按真实客户端 IP 的速率限制。代理访问日志不得记录请求体、Authorization 或查询中的凭据。
-4. 配置 HTTPS 域名后，重新打包带 `API_BASE_URL` 的 Android 客户端。先验证 `/api/health`，然后用两个账号验证登录、私密记录隔离和退出失效。
-5. 对数据库制定加密备份、恢复演练及备份到期删除政策。恢复旧备份可能恢复先前已经删除的记录；不得承诺立即擦除所有备份。
+Android 模拟器和 USB 真机均可使用 `adb reverse tcp:8787 tcp:8787` 后连接 `http://127.0.0.1:8787`。当前 debug 包只为环回地址放行 HTTP，不直接放行模拟器的 `10.0.2.2`。明文地址只用于本地开发测试。客户端需配置 `API_BASE_URL`，不能将 GitHub 仓库当作后端服务。
 
-可选 Caddy 示例（将域名替换为实际域名）：
+## 协议与同步
 
-```caddyfile
-api.your-domain.example {
-    request_body {
-        max_size 16KB
-    }
-    reverse_proxy 127.0.0.1:8787
-}
-```
+除 health、浏览器 OPTIONS 预检以外，每个请求都必须携带 `X-Sidequest-Protocol: 2`。所有私有请求带 `Authorization: Bearer <token>`，不在 URL 中放令牌。普通 JSON 请求仍限制为 16 KiB；单批同步最多 10 个操作，客户端必须同时满足两项限制。
 
-示例只展示 HTTPS 转发，不是完整的生产加固配置；Caddy 需要实际域名/DNS 和可用的 80/443 端口才能自动获取证书。服务本身不会申请证书、开通主机或部署到 GitHub。GitHub Actions 可运行测试，但不等于长期托管服务。
-
-## 已实现的账号与任务规则
-
-- 浏览推荐不要求登录，开始/更换/保存/完成必须先登录。账号使用稳定 UUID；昵称不是数据库主键，也不能代替密码认证。
-- 昵称 NFKC 标准化并去除首尾空格，2–20 个 Unicode 字母/数字、下划线或短横线；比较时转小写。因此 `Ａlice`、`Alice`、`alice` 视为同一昵称。SQLite UNIQUE 约束最终保证并发唯一性。这不是完整的 Unicode 视觉相似字符识别。
-- 密码 8–128 个 Unicode 字符；服务端使用随机盐与 scrypt 派生，不保存明文密码。会话令牌为 32 字节随机值，只保存 SHA-256 摘要，7 天绝对过期；退出立即撤销当前会话。
-- 不收手机号/邮箱，不提供密码找回。忘记密码且没有可用登录方式将无法恢复该账号；测试前务必告知参与者。首版没有改昵称或修改密码接口。
-- 每个账号同时最多进行一项活动。每天提供一个推荐入口，完成后可主动继续探索。
-- 更换活动按 **Asia/Shanghai 自然日** 每账号一次，不是每个活动一次。可以在开始前更换推荐，也可以在进行中更换。
-- 确认更换后清空旧活动草稿，避免记录对应错误；“先放一放”保留草稿。只有当前活动已开始时才允许保存或修改草稿。
-- “先放一放”调用 `stop`，不消耗更换次数；清除进行中状态但保留当前推荐及草稿。重新开始仍是该推荐。更换身份/偏好不会刷新推荐或更换次数。
-- 完成会生成私密日记，清除草稿，设置 `canRequestNext=true`；之后必须主动请求 `next` 才进入下一项推荐。删除日记不影响进度。
-- 日切保留未完成任务和草稿；前一天已完成且尚未选下一条时，新的自然日自动将推荐前进一条。换题记录保留日期，与当天日期比较。
-- 首版从 `green` 起始，按固定目录顺序轮转；身份/偏好可保存，个性化任务排序未实现，不声称是智能推荐。
-
-## 内容与隐私边界
-
-本次是**纯文字 alpha**：草稿允许 0–300 个 Unicode 码点，完成记录要求 1–300 个码点且不能全空白。不存在上传端点；多余的 `media` 等字段会被拒绝。图片、音频、视频格式/大小校验、元数据清理、对象存储、通知推送和分享卡片服务都未在本后端实现。原设计中的媒体限额不能解释为已支持上传。
-
-记录默认只对账号本身可见，没有公共列表或公开搜索接口。导出不含密码散列、盐或令牌。删除账号需要再次验证密码，并从活跃数据库逻辑删除用户、任务、日记和所有会话。SQLite WAL、存储介质或外部备份中可能仍有历史残留；本服务不承诺取证级安全擦除。
-
-服务不记录请求体、密码或令牌。数据库当前不是应用层加密，也不是端到端加密；主机管理员和有数据库权限的人能够读取日记。部署者需使用磁盘加密、最小权限及适当的隐私告知。不可用于收集高敏感数据或直接作为生产安全合规承诺。
-
-认证限制默认同一连接来源 IP 或昵称每 15 分钟最多 30 次，密码计算最多并行 4 个，JSON 最大 16 KiB。内存限流会随重启清空，不在多实例间共享；服务不信任 `X-Forwarded-For`。在反向代理后，连接来源通常都是代理 IP，因此这 30 次是代理下合计额度；扩大内测前应加入受信代理配置与共享限流，而不是假装已有生产级防滥用。
-
-## API 契约
-
-所有 POST 请求必须 `Content-Type: application/json`。私有端点使用 `Authorization: Bearer <token>`，不要放进 URL。错误为 `{"error":"中文提示"}`。`register/login` 返回 `{"token":"...","state":{...}}`，其他状态操作返回 `{"state":{...}}`。
-
-| 方法与路径 | 请求体/说明 |
+| 方法与路径 | 请求／结果 |
 | --- | --- |
-| `GET /api/health` | 不含用户数据的存活检查 |
-| `GET /api/state` | 无 token 返回访客；无效 token 返回 401，不降级为访客 |
-| `GET /api/export` | 要求登录，返回 `schemaVersion/exportedAt/timezone/state` |
-| `POST /api/register` | `nickname,password,role,preferences` |
-| `POST /api/login` | `nickname,password` |
-| `POST /api/logout` | `{}`；撤销当前令牌 |
-| `POST /api/preferences` | `role,preferences` |
-| `POST /api/claim` | `{}`；开始当前推荐，已有进行中活动时幂等 |
-| `POST /api/replace` | `{}`；每天一次，清空旧草稿 |
-| `POST /api/stop` | `{}`；随时停止，保留草稿 |
-| `POST /api/draft` | `text` |
-| `POST /api/complete` | `text`；原子完成，重复并发请求不会写两条 |
-| `POST /api/next` | `{}`；只有完成后才允许 |
-| `POST /api/delete-entry` | `id`；仅能删除自己的记录 |
-| `POST /api/delete-account` | `password`；删除账号及所有会话 |
+| `GET /api/health` | 版本、时区和协议信息 |
+| `POST /api/register` | `nickname,password,role,preferences`，返回 token 与 state |
+| `POST /api/login` | `nickname,password`，返回 token 与 state |
+| `POST /api/logout` | `{}`，撤销当前会话 |
+| `GET /api/state` | 轻量 state；不返回整本记录 |
+| `POST /api/preferences` | `role,preferences`，不替换当前活动 |
+| `POST /api/replace` | `{}`，上海自然日每天一次，清空旧草稿和附件关联 |
+| `POST /api/sync` | `branchId,baseRevision,commands`，返回 state、branchMode、receipts、entries |
+| `GET /api/entries?q=&cursor=&limit=20` | 按创建时间／ID 倒序，返回 entries、nextCursor、total |
+| `GET /api/entries/:id` | 返回当前账号的单条 entry |
+| `POST /api/update-entry` | `id,text,mediaIds,expectedRevision,requestId` |
+| `POST /api/delete-entry` | `id,requestId` |
+| `POST /api/delete-account` | `password`，验证密码后删除账号及会话 |
 
-`role` 允许 `student/employee/freelancer/leader/caregiver/retired/transition/other`；`preferences` 最多三个、不重复，可选值为 `安静独处、熟人同行、观察细节、动手创作、尝试新鲜、熟悉安心`。
+`claim/draft/complete/stop/next` 在线便利路径仍可用，正式离线客户端使用 `/sync`。`GET /api/export` 已移除。所有错误返回 `{ "error": "明确提示" }`，旧协议返回 426。
 
-状态结构：
+同步命令为 `{commandId,type,payload}`，类型为 `claim {questId}`、`draft {questId,text,mediaIds}`、`complete {clientRecordId,questId,text,mediaIds,createdAt}`、`stop {}`、`next {}`。文字完成记录要求 1–500 个 Unicode 码点，不能全空白；草稿可为空。客户端捕获时间保留为创建时间，后续编辑不改变它。
 
-```json
-{
-  "profile": {"id": "immutable-uuid", "nickname": "玩家", "role": "student", "preferences": []},
-  "activeQuestId": null,
-  "recommendedQuestId": "green",
-  "entries": [{"id": "entry-uuid", "questId": "green", "questTitle": "三种绿色", "text": "我的发现", "createdAt": "2026-10-10T06:00:00.000Z"}],
-  "replacedOn": null,
-  "draft": "",
-  "day": "2026-10-10",
-  "canRequestNext": true
-}
+`baseRevision` 是分支建立时的版本，此分支后续请求不得改变。服务端持久化最近应用版本；遇到任何云端进度变化，整条旧分支永久转为 `records_only`。有效完成记录继续保存，草稿和活动操作不再改变云端进度。本机未完成草稿由客户端独立保留，而不是覆盖云端草稿。
+
+账号＋clientRecordId、账号＋commandId 分别幂等：响应丢失后重试不会重复记录；相同标识对应不同内容返回 409。记录、附件关联、进度变化与命令回执在同一事务中提交。删除保留墓碑，旧完成命令不能复活记录。一个无效命令会回滚整个批次，不产生部分成功。账号之间允许使用相同 clientRecordId，数据仍隔离。
+
+编辑必须联网且通过 expectedRevision 检查；只有提交成功才解除原附件。取消编辑只删除本次新增且尚未绑定的上传，不影响原记录。退出或失效会话不能读取媒体；本机待传队列的保留及明确放弃由客户端负责。
+
+## 私有图片、视频与语音
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `POST /api/uploads` | `{kind,byteSize,clientUploadId}` 预约空间，返回 media |
+| `PUT /api/uploads/:id/content` | 二进制流式上传，不经过 JSON/Base64 |
+| `GET /api/uploads/:id` | 查询 reserved/uploading/processing/ready/failed 及错误 |
+| `DELETE /api/uploads/:id` | 取消未绑定上传；属于草稿或记录时拒绝 |
+| `GET/HEAD /api/media/:id/content` | 鉴权读取，支持单段 Range |
+| `GET/HEAD /api/media/:id/thumbnail` | 同样鉴权的缩略图；音频无缩略图 |
+
+每条记录最多 5 图＋1 段不超过 15 秒视频＋1 段不超过 60 秒语音，可混合但文字必填。源文件分别限制为图片 10 MiB、视频 50 MiB、语音 2 MiB；处理后单图 5 MiB、视频 30 MiB、语音 2 MiB，整条记录附件不超过 45 MiB。账号的已存储与预约处理空间合计不超过 1 GiB，最多 160 个未绑定上传。
+
+预约会计入源文件、最坏处理后文件、应急输出余量及缩略图空间，避免并发先占满磁盘。全局最多 4 个上传、1 个媒体处理；单次探测和处理分别限制为 15 秒与 60 秒。生产公网部署前仍需操作系统进程／磁盘资源限制，不将进程内限额称为生产级沙箱。
+
+仅接受实际可解码的 JPEG、PNG、WebP 图片以及受限媒体容器；不会信任扩展名、客户端 MIME 或文件路径。图片重编码为最长边不超过 1920 的 JPEG；视频重编码为最长边不超过 1280 的 H.264/AAC MP4；录音重编码为单声道 AAC/M4A。去掉元数据、章节和原始文件名，生成私有缩略图。图片／视频源像素不超过 4,000 万且任一边不超过 12,000。转码后再次校验大小、时长和可读取性，不将截断输出标为成功。
+
+文件写入随机媒体 ID 的私有目录，数据库只存关联与元数据。上传完成不等于记录保存；必须等全部附件 ready 后再提交记录。失败处理释放源文件和半成品，保留可重试 reservation。未绑定上传 24 小时过期，已绑定的暂停草稿附件不按年龄删除。
+
+记录／账号删除在数据库事务内写持久化清理任务，事务提交后才删文件；被取消或删除的转码不能重新建立 media 行。重启后重试清理；中断上传转为 failed，同一上传 ID 可重试。媒体 URL 不是公开链接，每次 Range 请求都重新鉴权；已下载到接收者设备的内容无法撤回。
+
+## 运维备份与恢复
+
+这是部署者工具，不是用户 JSON 导入导出。先停止服务，备份数据库与整个私有媒体目录；工具拒绝运行中的数据库、符号链接和已有目标目录。不会删除源文件，也不会覆盖任何现有数据。
+
+```sh
+node backup.mjs backup /absolute/data/sidequest-v2.sqlite /absolute/data/media /absolute/backups/new-snapshot
+node backup.mjs verify /absolute/backups/new-snapshot
+node backup.mjs restore /absolute/backups/new-snapshot /absolute/restored/new-data
 ```
 
-访客 `profile=null`，没有个人草稿、换题记录或日记。`entries` 按旧到新排序，同一时间的记录按插入顺序排列；客户端可以倒序展示。状态响应目前一次返回全部日记，尚无分页、离线冲突合并或跨设备实时推送，适用于小规模验证。
+备份使用 SQLite backup API 得到一致数据库，不遗漏 WAL 中已提交记录；生成文件大小／SHA-256 清单，并验证所有 ready 媒体在备份中存在。恢复仅写全新目录，先验证哈希和数据库完整性，再复制文件；输出新的 DATABASE_PATH 和 MEDIA_DIRECTORY，需显式配置后启动。备份包含账号凭据散列和私密内容，存储介质／备份须加密且限制访问。旧备份可能保留已删除数据，应制定保留与到期销毁政策。
+
+## 验证与安全边界
+
+`node --test` 同时运行 API、SQLite、分支冲突、幂等／墓碑、账户隔离、媒体限额／Range、断流与取消竞争、旧库不改写、备份恢复，以及真实 FFmpeg 转码测试。真实媒体测试不跳过缺失工具；一般 API 单元测试显式注入小型假处理器。所有测试使用确切的临时目录，不读写实际账号库。
+
+账号仍为昵称＋密码：昵称 NFKC 标准化、去首尾空格、转小写唯一；密码采用随机盐和 scrypt，令牌仅存 SHA-256 摘要、7 天过期。未提供密码找回；退出撤销当前会话。数据库和媒体不是端到端加密，具备服务器文件权限的人可读取。文件系统、SQLite WAL 和备份可能存在删除残留，不承诺取证级擦除。
+
+公网部署不在本轮范围。今后部署需 HTTPS、低权限账号、持久磁盘、磁盘加密、反向代理按路径限流及上传大小限制、受信代理真实 IP 策略和合规告知。原 JSON 路径保持 16 KiB，二进制上传单独配置不超过 50 MiB；不得把私有媒体目录映射到公开静态路径。内存认证限流会重启清零，且当前不信任 X-Forwarded-For，不能声称已完成生产级防滥用审计。

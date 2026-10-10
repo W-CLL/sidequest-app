@@ -1,5 +1,7 @@
 import 'dart:collection';
 
+part 'quest_catalog.g.dart';
+
 class RoleOption {
   const RoleOption(this.id, this.label, this.subtitle);
   final String id;
@@ -31,6 +33,7 @@ class Quest {
     required this.steps,
     required this.hint,
     this.roleHints = const {},
+    this.preferenceTags = const [],
   });
   final String id;
   final String title;
@@ -40,172 +43,63 @@ class Quest {
   final List<String> steps;
   final String hint;
   final Map<String, String> roleHints;
+  final List<String> preferenceTags;
 }
-
-const questCatalog = <Quest>[
-  Quest(
-    id: 'green',
-    title: '三种绿色',
-    subtitle: '给平常的世界，换一种看法。',
-    category: '观察',
-    minutes: 5,
-    steps: ['在熟悉的室内或安全的附近，找三种绿色。', '看看它们偏黄、偏蓝，还是带一点灰。', '用一句话记录最喜欢的那一种。'],
-    hint: '绿植、包装、书封面都可以；不用出门，也不用拍照。',
-    roleHints: {
-      'student': '课间看看文具、书本或窗边绿植。',
-      'employee': '休息时，在办公桌附近找找绿色。',
-      'freelancer': '暂停手头工作，看看桌边的颜色。',
-      'leader': '两件待办之间，给自己五分钟。',
-      'caregiver': '照护间隙，在身边找三种绿色。',
-    },
-  ),
-  Quest(
-    id: 'light',
-    title: '一小片光',
-    subtitle: '光落在哪里，日常就有了新层次。',
-    category: '观察',
-    minutes: 5,
-    steps: ['在熟悉的室内找一片自然光或灯光。', '观察它落在物体上的颜色与边缘。', '写下让你停留的一处细节。'],
-    hint: '只看反射的光，不直视太阳或强光，不攀爬、不靠近窗外。',
-  ),
-  Quest(
-    id: 'texture',
-    title: '指尖的纹理',
-    subtitle: '用触感重新认识一个日常物件。',
-    category: '感知',
-    minutes: 5,
-    steps: ['选一个干净、安全、属于你的物件。', '轻轻感受它的表面：光滑、粗糙或柔软？', '用三个词描述它。'],
-    hint: '纸张、衣袖或木桌都可以；不触摸尖锐、烫手或不明物品。',
-  ),
-  Quest(
-    id: 'sounds',
-    title: '一分钟声音地图',
-    subtitle: '不录音，也能留下一段声音。',
-    category: '感知',
-    minutes: 5,
-    steps: ['在安全安静的地方坐好。', '用一分钟听听近处和远处的环境声。', '用文字记下两种声音和你的感受。'],
-    hint: '无需录音、不记录他人对话；听觉不便时可以改为观察两种轻微运动。',
-  ),
-  Quest(
-    id: 'sky',
-    title: '窗边的天空',
-    subtitle: '熟悉的窗景，每天都不一样。',
-    category: '观察',
-    minutes: 5,
-    steps: ['站在安全的室内位置看看窗景。', '找一种天空或远处景物的颜色。', '给此刻的颜色起一个名字。'],
-    hint: '不靠近窗沿、不向窗外探身；没有窗户时，观察一张自己的风景照片。',
-  ),
-  Quest(
-    id: 'corner',
-    title: '一个角落的新角度',
-    subtitle: '不用远行，也能发现新的画面。',
-    category: '观察',
-    minutes: 5,
-    steps: ['选择家里一个熟悉的角落。', '坐下或站稳，从不同高度看一眼。', '写下平时没有注意到的细节。'],
-    hint: '不搬动重物、不攀爬；只在舒服、安全的位置观察。',
-  ),
-  Quest(
-    id: 'color',
-    title: '今日配色',
-    subtitle: '把今天的心情，装进三种颜色。',
-    category: '创作',
-    minutes: 5,
-    steps: ['看看身边三个已有物品。', '挑出三种愿意放在一起的颜色。', '为这组配色起个名字。'],
-    hint: '不需要购物；可以只用文字，不必挪动或拍下物品。',
-  ),
-  Quest(
-    id: 'leaves',
-    title: '叶子的线条',
-    subtitle: '一片小叶子，也藏着自己的地图。',
-    category: '观察',
-    minutes: 5,
-    steps: ['观察一株熟悉的绿植或植物照片。', '看看叶缘、叶脉和弯曲的方向。', '用一句话描绘它的形状。'],
-    hint: '只观察、不采摘、不触碰未知植物；室内照片也算完成。',
-  ),
-  Quest(
-    id: 'object',
-    title: '日常物件的新名字',
-    subtitle: '给熟悉的东西一点想象力。',
-    category: '创作',
-    minutes: 5,
-    steps: ['选一个手边的普通物件。', '想象你第一次见到它，会怎样形容？', '给它起一个有趣的新名字。'],
-    hint: '杯子、笔或钥匙都可以；不用透露住址、钥匙细节或个人信息。',
-  ),
-  Quest(
-    id: 'shadow',
-    title: '影子的形状',
-    subtitle: '看看光背后的小小图案。',
-    category: '观察',
-    minutes: 5,
-    steps: ['在安全的室内找一个影子。', '观察它像什么、边缘是否清晰。', '用几个词描述这个小图案。'],
-    hint: '用现有光线即可；不用强光、明火，也不需要移动电器。',
-  ),
-  Quest(
-    id: 'water',
-    title: '认真喝一杯水',
-    subtitle: '把一个习惯动作，变成短暂休息。',
-    category: '感知',
-    minutes: 5,
-    steps: ['如果身体情况允许，准备平时会喝的适温饮品。', '坐稳，按舒服的节奏喝一小口。', '记下杯子的触感或这一刻的心情。'],
-    hint: '遵循个人医嘱，不强迫饮水；也可以只观察杯子的颜色和形状。',
-  ),
-  Quest(
-    id: 'lines',
-    title: '身边的三条线',
-    subtitle: '世界也可以是一张简单的画。',
-    category: '观察',
-    minutes: 5,
-    steps: ['看看身边物品的边缘。', '找到一条直线、一条曲线和一条你喜欢的线。', '写下它们让你想到什么。'],
-    hint: '书页、衣服和桌沿都可以；不用触碰电线或任何危险设施。',
-  ),
-  Quest(
-    id: 'paper',
-    title: '一张纸的小创作',
-    subtitle: '不需要技巧，也可以留下一个小作品。',
-    category: '创作',
-    minutes: 10,
-    steps: ['找一张已有的废纸和一支笔。', '随意画三条线，再添一点你喜欢的形状。', '给这张小画起个名字。'],
-    hint: '不用剪刀、胶水或购买材料；没有纸笔时，用文字描述想画的东西。',
-  ),
-  Quest(
-    id: 'detail',
-    title: '被忽略的小细节',
-    subtitle: '熟悉不是没有惊喜，只是看得太快。',
-    category: '观察',
-    minutes: 5,
-    steps: ['选一个每天都能看到的安全物件。', '认真看半分钟，找一处此前没注意的细节。', '记录这次新发现。'],
-    hint: '只观察自己的物品；不翻看他人物品、文件或屏幕。',
-  ),
-  Quest(
-    id: 'pause',
-    title: '五分钟留白',
-    subtitle: '今天也可以什么都不赶。',
-    category: '休息',
-    minutes: 5,
-    steps: ['在安全舒服的位置坐一会儿。', '放下不紧急的事，看看一个让你自在的物件。', '用一个词记下此刻的状态。'],
-    hint: '不用闭眼、憋气或做规定动作；不舒服就停止，休息本身已经很好。',
-  ),
-  Quest(
-    id: 'gratitude',
-    title: '写给今天的小感谢',
-    subtitle: '留住一件很小、但真实的好事。',
-    category: '记录',
-    minutes: 5,
-    steps: ['回想今天一件还不错的小事。', '写一两句话，留给现在或将来的自己。', '如果今天很难，也可以只写“我已经尽力了”。'],
-    hint: '不用强迫积极，不必联系别人，也无需分享私密经历。',
-  ),
-];
 
 Quest questById(String id) => questCatalog.firstWhere(
   (q) => q.id == id,
-  orElse: () => questCatalog.first,
+  orElse: () => throw const QuestException('活动内容与当前版本不匹配，请更新应用。'),
 );
-String nextQuestId(String id) =>
-    questCatalog[(questCatalog.indexWhere((q) => q.id == id) + 1) %
-            questCatalog.length]
-        .id;
-String localDay(DateTime date) =>
-    '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+String nextQuestId(String id) {
+  questById(id); // Unknown catalog versions must never silently become green.
+  return questCatalog[(questCatalog.indexWhere((q) => q.id == id) + 1) %
+          questCatalog.length]
+      .id;
+}
+
+String localDay(DateTime date) {
+  final day = date.toUtc().add(const Duration(hours: 8));
+  return '${day.year.toString().padLeft(4, '0')}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+}
+
+String recommendQuestId({
+  required List<String> preferences,
+  List<String> history = const [],
+  String? currentId,
+}) {
+  final ids = questCatalog.map((q) => q.id).toList();
+  final valid = history.where(ids.contains).toList();
+  final recent = valid.skip(valid.length > 7 ? valid.length - 7 : 0).toList();
+  var candidates = questCatalog
+      .where((q) => q.id != currentId && !recent.contains(q.id))
+      .toList();
+  while (candidates.isEmpty && recent.isNotEmpty) {
+    recent.removeAt(0);
+    candidates = questCatalog
+        .where((q) => q.id != currentId && !recent.contains(q.id))
+        .toList();
+  }
+  if (candidates.isEmpty) return questCatalog.first.id;
+  final current = currentId == null ? -1 : ids.indexOf(currentId);
+  int distance(String id) => current < 0
+      ? ids.indexOf(id)
+      : (ids.indexOf(id) - current + ids.length) % ids.length;
+  candidates.sort((a, b) {
+    final score = b.preferenceTags
+        .where(preferences.contains)
+        .length
+        .compareTo(a.preferenceTags.where(preferences.contains).length);
+    if (score != 0) return score;
+    final recent = valid.lastIndexOf(a.id).compareTo(valid.lastIndexOf(b.id));
+    return recent != 0 ? recent : distance(a.id).compareTo(distance(b.id));
+  });
+  return candidates.first.id;
+}
+
+List<String> appendRecommendation(List<String> history, String id) {
+  final all = [...history, id];
+  return all.skip(all.length > 40 ? all.length - 40 : 0).toList();
+}
 
 class UserProfile {
   UserProfile({
@@ -232,6 +126,119 @@ class UserProfile {
   );
 }
 
+enum MediaKind { image, video, audio }
+
+class MediaAttachment {
+  const MediaAttachment({
+    required this.id,
+    required this.kind,
+    this.mimeType = '',
+    this.byteSize = 0,
+    this.durationMs,
+    this.width,
+    this.height,
+    this.status = 'ready',
+    this.localPath,
+  });
+  final String id, mimeType, status;
+  final MediaKind kind;
+  final int byteSize;
+  final int? durationMs, width, height;
+  final String? localPath;
+  bool get isReady => status == 'ready';
+  MediaAttachment copyWith({
+    String? id,
+    MediaKind? kind,
+    String? mimeType,
+    int? byteSize,
+    Object? durationMs = _unchanged,
+    Object? width = _unchanged,
+    Object? height = _unchanged,
+    String? status,
+    Object? localPath = _unchanged,
+  }) => MediaAttachment(
+    id: id ?? this.id,
+    kind: kind ?? this.kind,
+    mimeType: mimeType ?? this.mimeType,
+    byteSize: byteSize ?? this.byteSize,
+    durationMs: identical(durationMs, _unchanged)
+        ? this.durationMs
+        : durationMs as int?,
+    width: identical(width, _unchanged) ? this.width : width as int?,
+    height: identical(height, _unchanged) ? this.height : height as int?,
+    status: status ?? this.status,
+    localPath: identical(localPath, _unchanged)
+        ? this.localPath
+        : localPath as String?,
+  );
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'kind': kind.name,
+    'mimeType': mimeType,
+    'byteSize': byteSize,
+    if (durationMs != null) 'durationMs': durationMs,
+    if (width != null) 'width': width,
+    if (height != null) 'height': height,
+    'status': status,
+    if (localPath != null) 'localPath': localPath,
+  };
+  factory MediaAttachment.fromJson(Map<String, dynamic> json) =>
+      MediaAttachment(
+        id: json['id'] as String,
+        kind: MediaKind.values.byName(json['kind'] as String),
+        mimeType: json['mimeType'] as String? ?? '',
+        byteSize: _mediaInteger(json['byteSize']) ?? 0,
+        durationMs: _mediaInteger(json['durationMs']),
+        width: _mediaInteger(json['width']),
+        height: _mediaInteger(json['height']),
+        status: json['status'] as String? ?? 'ready',
+        localPath: json['localPath'] as String?,
+      );
+}
+
+int? _mediaInteger(Object? value) {
+  if (value == null) return null;
+  if (value is! num || !value.isFinite || value < 0 || value != value.toInt()) {
+    throw const QuestException('媒体信息无效，请更新应用或重新选择附件。');
+  }
+  return value.toInt();
+}
+
+List<MediaAttachment> mediaList(Object? value) => (value as List? ?? [])
+    .map((m) => MediaAttachment.fromJson(Map<String, dynamic>.from(m as Map)))
+    .toList();
+void validateMedia(List<MediaAttachment> media) {
+  if (media.map((m) => m.id).toSet().length != media.length) {
+    throw const QuestException('同一附件不能重复添加。');
+  }
+  if (media.where((m) => m.kind == MediaKind.image).length > 5 ||
+      media.where((m) => m.kind == MediaKind.video).length > 1 ||
+      media.where((m) => m.kind == MediaKind.audio).length > 1) {
+    throw const QuestException('每条最多 5 张图片、1 段视频和 1 段语音。');
+  }
+  for (final item in media) {
+    final limit = switch (item.kind) {
+      MediaKind.image => 10 * 1024 * 1024,
+      MediaKind.video => 50 * 1024 * 1024,
+      MediaKind.audio => 2 * 1024 * 1024,
+    };
+    if (item.byteSize < 0 || item.byteSize > limit) {
+      throw const QuestException('附件超过文件大小限制。');
+    }
+    if (item.kind != MediaKind.image &&
+        item.durationMs != null &&
+        item.durationMs! <= 0) {
+      throw const QuestException('媒体时长无效，请重新选择或录制。');
+    }
+    if (item.kind == MediaKind.video && (item.durationMs ?? 0) > 15000) {
+      throw const QuestException('视频不能超过 15 秒，请重新选择。');
+    }
+    if (item.kind == MediaKind.audio && (item.durationMs ?? 0) > 60000) {
+      throw const QuestException('语音不能超过 60 秒。');
+    }
+  }
+}
+
 class JournalEntry {
   const JournalEntry({
     required this.id,
@@ -239,18 +246,55 @@ class JournalEntry {
     required this.questTitle,
     required this.text,
     required this.createdAt,
-  });
+    this.attachments = const [],
+    this.revision = 1,
+    DateTime? updatedAt,
+    this.syncStatus = 'saved',
+    this.syncError,
+  }) : updatedAt = updatedAt ?? createdAt;
   final String id;
   final String questId;
   final String questTitle;
   final String text;
   final DateTime createdAt;
+  final DateTime updatedAt;
+  final List<MediaAttachment> attachments;
+  final int revision;
+  final String syncStatus;
+  final String? syncError;
+  bool get isSynced => syncStatus == 'saved';
+  JournalEntry copyWith({
+    String? text,
+    List<MediaAttachment>? attachments,
+    int? revision,
+    DateTime? updatedAt,
+    String? syncStatus,
+    Object? syncError = _unchanged,
+  }) => JournalEntry(
+    id: id,
+    questId: questId,
+    questTitle: questTitle,
+    text: text ?? this.text,
+    createdAt: createdAt,
+    attachments: attachments ?? this.attachments,
+    revision: revision ?? this.revision,
+    updatedAt: updatedAt ?? this.updatedAt,
+    syncStatus: syncStatus ?? this.syncStatus,
+    syncError: identical(syncError, _unchanged)
+        ? this.syncError
+        : syncError as String?,
+  );
   Map<String, dynamic> toJson() => {
     'id': id,
     'questId': questId,
     'questTitle': questTitle,
     'text': text,
     'createdAt': createdAt.toIso8601String(),
+    'updatedAt': updatedAt.toIso8601String(),
+    'revision': revision,
+    'attachments': attachments.map((m) => m.toJson()).toList(),
+    'syncStatus': syncStatus,
+    if (syncError != null) 'syncError': syncError,
   };
   factory JournalEntry.fromJson(Map<String, dynamic> json) => JournalEntry(
     id: json['id'] as String,
@@ -258,10 +302,77 @@ class JournalEntry {
     questTitle: json['questTitle'] as String,
     text: json['text'] as String,
     createdAt: DateTime.parse(json['createdAt'] as String),
+    updatedAt: json['updatedAt'] == null
+        ? null
+        : DateTime.parse(json['updatedAt'] as String),
+    revision: (json['revision'] as num?)?.toInt() ?? 1,
+    attachments: mediaList(json['attachments']),
+    syncStatus: json['syncStatus'] as String? ?? 'saved',
+    syncError: json['syncError'] as String?,
   );
 }
 
 const _unchanged = Object();
+
+class ConflictDraft {
+  const ConflictDraft({
+    required this.id,
+    required this.questId,
+    required this.text,
+    required this.createdAt,
+    this.attachments = const [],
+    this.branchId = '',
+    this.baseRevision = 0,
+  });
+  final String id, questId, text;
+  final String branchId;
+  final int baseRevision;
+  final DateTime createdAt;
+  final List<MediaAttachment> attachments;
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'questId': questId,
+    'text': text,
+    'createdAt': createdAt.toIso8601String(),
+    'attachments': attachments.map((m) => m.toJson()).toList(),
+    'branchId': branchId,
+    'baseRevision': baseRevision,
+  };
+  factory ConflictDraft.fromJson(Map<String, dynamic> json) => ConflictDraft(
+    id: json['id'] as String,
+    questId: json['questId'] as String,
+    text: json['text'] as String,
+    createdAt: DateTime.parse(json['createdAt'] as String),
+    attachments: mediaList(json['attachments']),
+    branchId: json['branchId'] as String? ?? '',
+    baseRevision: (json['baseRevision'] as num?)?.toInt() ?? 0,
+  );
+}
+
+class EntryPageResult {
+  const EntryPageResult({
+    required this.entries,
+    this.nextCursor,
+    required this.total,
+  });
+  final List<JournalEntry> entries;
+  final String? nextCursor;
+  final int total;
+}
+
+class SyncSummary {
+  const SyncSummary({
+    this.pending = 0,
+    this.uploading = 0,
+    this.failed = 0,
+    this.message,
+    this.requiresLogin = false,
+  });
+  final int pending, uploading, failed;
+  final String? message;
+  final bool requiresLogin;
+  bool get hasPending => pending > 0 || uploading > 0 || failed > 0;
+}
 
 class AppSnapshot {
   AppSnapshot({
@@ -273,7 +384,17 @@ class AppSnapshot {
     this.draft = '',
     required this.day,
     this.canRequestNext = false,
-  }) : entries = UnmodifiableListView(entries);
+    List<MediaAttachment> draftAttachments = const [],
+    this.progressRevision = 0,
+    List<String> recommendationHistory = const [],
+    int? entryCount,
+    List<ConflictDraft> conflictDrafts = const [],
+    this.nextCursor,
+  }) : entries = UnmodifiableListView(entries),
+       draftAttachments = UnmodifiableListView(draftAttachments),
+       recommendationHistory = UnmodifiableListView(recommendationHistory),
+       conflictDrafts = UnmodifiableListView(conflictDrafts),
+       entryCount = entryCount ?? entries.length;
   final UserProfile? profile;
   final String? activeQuestId;
   final String recommendedQuestId;
@@ -282,6 +403,11 @@ class AppSnapshot {
   final String draft;
   final String day;
   final bool canRequestNext;
+  final List<MediaAttachment> draftAttachments;
+  final int progressRevision, entryCount;
+  final List<String> recommendationHistory;
+  final List<ConflictDraft> conflictDrafts;
+  final String? nextCursor;
   bool get replacementAvailable => replacedOn != day;
   AppSnapshot copyWith({
     Object? profile = _unchanged,
@@ -292,6 +418,12 @@ class AppSnapshot {
     String? draft,
     String? day,
     bool? canRequestNext,
+    List<MediaAttachment>? draftAttachments,
+    int? progressRevision,
+    List<String>? recommendationHistory,
+    int? entryCount,
+    List<ConflictDraft>? conflictDrafts,
+    Object? nextCursor = _unchanged,
   }) => AppSnapshot(
     profile: identical(profile, _unchanged)
         ? this.profile
@@ -307,6 +439,14 @@ class AppSnapshot {
     draft: draft ?? this.draft,
     day: day ?? this.day,
     canRequestNext: canRequestNext ?? this.canRequestNext,
+    draftAttachments: draftAttachments ?? this.draftAttachments,
+    progressRevision: progressRevision ?? this.progressRevision,
+    recommendationHistory: recommendationHistory ?? this.recommendationHistory,
+    entryCount: entryCount ?? this.entryCount,
+    conflictDrafts: conflictDrafts ?? this.conflictDrafts,
+    nextCursor: identical(nextCursor, _unchanged)
+        ? this.nextCursor
+        : nextCursor as String?,
   );
   Map<String, dynamic> toJson() => {
     'profile': profile?.toJson(),
@@ -317,6 +457,12 @@ class AppSnapshot {
     'draft': draft,
     'day': day,
     'canRequestNext': canRequestNext,
+    'draftAttachments': draftAttachments.map((m) => m.toJson()).toList(),
+    'progressRevision': progressRevision,
+    'recommendationHistory': recommendationHistory,
+    'entryCount': entryCount,
+    'conflictDrafts': conflictDrafts.map((d) => d.toJson()).toList(),
+    'nextCursor': nextCursor,
   };
   factory AppSnapshot.fromJson(Map<String, dynamic> json) => AppSnapshot(
     profile: json['profile'] == null
@@ -333,6 +479,16 @@ class AppSnapshot {
     draft: json['draft'] as String? ?? '',
     day: json['day'] as String? ?? localDay(DateTime.now()),
     canRequestNext: json['canRequestNext'] as bool? ?? false,
+    draftAttachments: mediaList(json['draftAttachments']),
+    progressRevision: (json['progressRevision'] as num?)?.toInt() ?? 0,
+    recommendationHistory: List<String>.from(
+      json['recommendationHistory'] as List? ?? [],
+    ),
+    entryCount: (json['entryCount'] as num?)?.toInt(),
+    conflictDrafts: (json['conflictDrafts'] as List? ?? [])
+        .map((d) => ConflictDraft.fromJson(Map<String, dynamic>.from(d as Map)))
+        .toList(),
+    nextCursor: json['nextCursor'] as String?,
   );
 }
 
