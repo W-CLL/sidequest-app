@@ -1,102 +1,128 @@
-# 支线 Android 内测版：构建与安装
+# 支线 0.1.1：构建与验证
 
-本项目使用 Flutter 同一套业务和界面代码，首轮交付目标是 Android 调试 APK。`ios/` 保留，但本轮未进行 iOS 编译或真机验证。当前没有创建远程 Git 仓库，没有执行 GitHub Actions，也没有配置云端部署。
+仓库：[W-CLL/sidequest-app](https://github.com/W-CLL/sidequest-app)，默认分支 `main`。本轮目标是 Android debug APK，应用版本 `0.1.1+2`；没有部署公网 API、配置 release 签名或发布 GitHub Release。
 
-## 本轮实测结果（2026-10-10）
+## 开发环境
 
-本机已成功执行 `flutter build apk --debug --split-per-abi`，生成 ARM64、ARMv7 和 x86_64 三份 APK。首次完整构建用时约 94 秒；最后更换图标后的增量构建用时约 6 秒。最终 APK 时间为 12:25:19，晚于所有 `lib/*.dart` 文件最后修改时间（最新 12:19:08）与图标资源。
+- Flutter **3.47.0 stable** / Dart **3.13.0**。
+- Node.js **24.x**：服务端与真实 Flutter → Node 合约测试需要。
+- JDK **21**、Android Gradle Plugin **9.1.0**、Gradle **9.3.1**。
+- Android SDK Platform **36**、Build Tools **36.0.0**、NDK **28.2.13676358**；最低 Android **7.0 / API 24**。
+- Gradle wrapper 固定官方 `bin` 分发包及 SHA-256。`local.properties`、生成文件、数据库、签名文件和构建产物不进入 Git。
 
-Android 五档 mipmap 和 iOS 全部 AppIcon 已替换为森林绿底、浅黄叶子的本地程序绘制图标，非默认 Flutter 图标。最终交付 APK 已重新校验签名和权限，SHA-256 文件已更新。构建完成后已停止本次 Gradle daemon。
-
-- 三包均通过 Android `apksigner verify --verbose`（APK v2 签名），显示名“支线”，包名 `app.sidequest.sidequest`，版本 `0.1.0`，最低 Android 7.0 / API 24。
-- `aapt dump badging` 核对权限只有 INTERNET 和应用内部的 signature 级 receiver 权限，无 GPS、相机、麦克风、相册或通知权限。
-- Android SDK Platform 34 / 35 被插件构建依赖自动安装，使用环境已有的已接受许可证；未运行接受许可证的命令，未升级 NDK 或安装模拟器。
-- `share_plus` 11.1.0 有未来 Flutter 内置 Kotlin 兼容性警告，不影响本轮成功构建；升级 Flutter 前应重新验证该依赖。
-- 没有连接 Android 手机，故尚未做安装启动、软键盘、系统分享面板的真机验证。
-- GitHub workflow 仅已写入，尚未在 GitHub 执行；iOS 尚未构建。
-
-交付目录中提供 `sidequest-android-v0.1.0-arm64.apk`（多数较新手机）与 `sidequest-android-v0.1.0-armv7.apk`（部分旧款 32 位手机），以及 `sidequest-apk-sha256.txt`。测试包采用单机模式，没有编译公共 API 地址。
-
-## 版本与前提
-
-- Flutter **3.47.0 stable**、Dart **3.13.0**。
-- JDK **21**；Android Gradle Plugin **9.1.0**；Gradle **9.3.1**。wrapper 使用官方 `bin` 分发包并固定 SHA-256，避免下载无须使用的完整文档包。
-- Android SDK Platform **36**、Build Tools **36.0.0**、NDK **28.2.13676358**（沿用 Flutter 模板默认版本）。
-- 当前 Flutter 默认最低 Android API **24**（Android 7.0）。
-- 首次构建需要访问 pub.dev、Google Maven、Maven Central、Gradle 和 Flutter 下载源。网络失败不能视作 APK 已完成。
-- 如 SDK 报告许可证未接受，需要环境所有者自行阅读并同意相关条款；本项目脚本不会在本机代为接受。
-
-若官方 Gradle / Google Maven 下载超时，而系统浏览器能正常访问，可检查 Java 是否遗漏了现有代理配置。仅给当前构建进程配置经过确认的代理，不修改系统或用户级 Gradle 配置，也不要换用来源不明的镜像。本轮本地构建使用了机器已经配置的回环代理，并验证 Gradle 包的 SHA-256；代理地址不写入项目或 GitHub workflow。
+首次构建需要访问 Flutter、pub.dev、Google Maven、Maven Central 与 Gradle 官方源。SDK 许可证应由环境所有者阅读并接受；项目不会自动运行接受许可证的命令。
 
 ## 本机构建
 
-在本目录运行：
+在仓库根目录运行：
 
 ```powershell
 flutter pub get
 flutter analyze
 flutter test
+node --test server/server.test.mjs
 flutter build apk --debug --split-per-abi
 ```
 
-默认未设置 `API_BASE_URL`，用于本机数据的初步体验。单机模式的昵称唯一性不等于跨设备全局唯一，也不是已上线的云账号服务。清除应用数据、卸载或更换设备可能导致本地账号及记录丢失；不要用于保存不可替代的私人资料。
+合约测试优先使用 `SIDEQUEST_NODE`，未配置时使用 `PATH` 中的 `node`；不包含个人开发机路径。
 
-产物位于 `build/app/outputs/flutter-apk/`：
+三架构构建产物位于 `build/app/outputs/flutter-apk/`：
 
 - `app-arm64-v8a-debug.apk`：多数较新的实体 Android 手机。
-- `app-armeabi-v7a-debug.apk`：部分较老的 32 位 ARM 手机。
-- `app-x86_64-debug.apk`：对应架构的模拟器等设备。
+- `app-armeabi-v7a-debug.apk`：部分旧款 32 位 ARM 手机。
+- `app-x86_64-debug.apk`：对应架构的模拟器。
 
-安装到已连接并允许 USB 调试的测试手机：
+Flutter 为拆分 APK 的 `versionCode` 自动添加架构偏移：本版 armv7 / arm64 / x86_64 分别为 `1002` / `2002` / `4002`，对应的客户端版本均为 `0.1.1+2`。
+
+本轮交付副本保存在未跟踪的 `artifacts/v0.1.1/`，同时保存 SHA-256 和构建/签名核查记录；APK 不提交源码仓库。
 
 ```powershell
 adb install -r build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk
 ```
 
-也可以将匹配设备架构的 APK 传到手机，授权对应文件管理器“安装未知应用”后安装。仅向受信任的内测者分发。
+默认没有 `API_BASE_URL`，运行本机模式。debug 签名由工具生成，不等于正式发布签名；另一台电脑或 GitHub runner 的 debug key 可能不同，覆盖安装前应核对签名并保护需要保留的数据。
 
-Android 安装包仍必须签名，但 **debug 签名由工具自动生成**，本轮不需要用户准备发布证书。调试包可调试，不是生产发行包。不同电脑或 GitHub 全新 runner 生成的 debug key 可能不同，旧版本可能无法直接覆盖安装；不要把签名 key 上传到公开仓库。遇到签名冲突时，先保护需要保留的资料，再决定是否卸载旧包。
+### Windows 跨磁盘构建
 
-## 可选 API 接入
+如果 Pub 缓存和项目不在同一个磁盘，Kotlin 插件增量编译可能报 `this and base files have different roots`。本轮首次构建遇到这一环境问题，关闭本次进程的 Kotlin 增量编译后成功；无需修改项目配置、全局环境或清空缓存：
 
-仅在服务已由你部署且可通过 HTTPS 访问时设置，例如：
+```powershell
+$env:GRADLE_OPTS = ($env:GRADLE_OPTS + ' -Dorg.gradle.project.kotlin.incremental=false').Trim()
+flutter build apk --debug --split-per-abi --no-pub
+```
+
+环境变量仅对当前 PowerShell 进程及其子进程生效。当前 `share_plus` 仍有未来 Flutter 版本不再支持旧 Kotlin 插件接入方式的构建警告；本版本构建通过，本轮没有顺带升级依赖。
+
+## GitHub 检查与手动打包
+
+- `Checks`：`main` 推送、PR 和手动触发时运行 Flutter analyze、Flutter test、Node 集成测试。
+- `Android alpha APK`：只在 Actions 页面手动触发，使用固定 Flutter/JDK/Node 版本，检查通过后构建 debug APK 并保存 artifact 14 天。
+- `api_base_url` 留空生成本机版；只接受无凭据的公开 HTTPS API 地址。该输入不会创建或部署服务器。
+- `v0.1.0` 是初版源码基线；本轮完成的源码以 `v0.1.1` 标记。通过提交历史可以分别查看布局、文案和验证调整。
+
+仓库未添加开源许可证；公开可见不代表已选择具体授权条款。
+
+## 布局检查和截图
+
+自动化布局测试覆盖：
+
+- 390×844、默认字号、关闭键盘：检查主要内容与操作首屏可见。
+- 360×640、320×568：允许垂直滚动，检查内容及操作可达。
+- 390×844、1.3 与 2.0 倍字号：检查文字换行、卡片增长和操作可达。
+- 约 300dp 键盘遮挡：检查登录输入、同意项、错误反馈与记录保存操作。
+- 今日推荐/进行中/完成、登录前后“我的”，以及完整 16 条活动详情。
+
+截图测试使用 Flutter 真实渲染和本机中文字体。Windows 默认读取系统微软雅黑；其他系统请设置 `SIDEQUEST_PREVIEW_FONT` 为本机可用的中文 TTF/TTC 字体路径。字体仅用于本地预览，不复制到仓库。
+
+```powershell
+flutter test test/preview_capture_test.dart --dart-define=CAPTURE_PREVIEWS=true
+```
+
+该命令更新 `screenshots/`，默认 `flutter test` 会跳过截图写入步骤。截图在 390×844 逻辑尺寸下以 2 倍像素输出。它们是开发预览，不代表 Android 真机、系统键盘、系统分享和导出面板已经验收。
+
+## 可选远程服务
+
+服务端启动与 HTTPS 部署见 [server/README.md](server/README.md)。仅在服务已经可访问时构建：
 
 ```powershell
 flutter build apk --debug --split-per-abi --dart-define=API_BASE_URL=https://your-api.example.com
 ```
 
-该地址会编译进客户端，**不能包含密码、token 或其他秘密**。配置 URL 本身不会部署后端、创建数据库或开通存储。客户端和服务端仍须分别测试。生产/分发默认禁止明文 HTTP；iOS 保持系统默认 HTTPS 限制。
+API 地址会编译进客户端，不能包含密码或令牌。单机数据不会自动迁移到远程账号。
 
-仅限 USB 本机联调时，可将后端绑定到电脑的 `127.0.0.1:8080` 并执行：
+USB 本机联调使用默认端口 8787：
 
 ```powershell
-adb reverse tcp:8080 tcp:8080
-flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8080
+adb reverse tcp:8787 tcp:8787
+flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8787
 ```
 
-Android debug 资源仅为 `127.0.0.1` 与 `localhost` 放行 HTTP；不放行局域网任意地址，不把开发后端绑定到 `0.0.0.0`。结束后可运行 `adb reverse --remove tcp:8080`。应用自身的 URL 校验如禁止该调试入口，应以该校验为准，不要为联调放宽发布版策略。
+Android debug 配置仅为 `127.0.0.1` 与 `localhost` 放行 HTTP；结束后可执行 `adb reverse --remove tcp:8787`。发布配置禁止明文 HTTP，iOS 使用系统默认 HTTPS 限制。
 
-## GitHub 手动构建
+## 原生平台边界
 
-提供的 `.github/workflows/android-alpha.yml` 假设**此目录内容就是 Git 仓库根目录**。如果把它放在大型仓库的子目录，需要同步调整 workflow 的执行目录及产物路径。
+应用显示名“支线”，包名保持 `app.sidequest.sidequest`。本轮没有新增定位、相机、麦克风、相册或通知权限。Android 关闭自动备份，并排除云备份和设备迁移中的应用数据；记录没有应用层加密。
 
-1. 在你授权的新建或现有仓库中放入本项目；本轮尚未执行此步骤。
-2. 打开 GitHub 的 Actions → Android alpha APK → Run workflow。
-3. `api_base_url` 留空生成单机 alpha；填写无凭据的公开 HTTPS URL 才编译 API 地址。
-4. 流程依次安装固定版本 Flutter/JDK、解析依赖、静态检查、运行测试，再构建各架构的 debug APK。
-5. 成功后下载 `sidequest-android-alpha-<运行号>` artifact，解压并选择合适 APK。SHA256SUMS 文件用于核对下载文件，非发行证书。产物保留 14 天。
+没有连接 Android 实体手机时，安装、系统键盘、原生分享、文件导出和覆盖升级均仍需真机验收。iOS 工程保留，需要 macOS/Xcode 和有效签名配置后单独构建、测试。
 
-流程只申请仓库读取权限，只能手动启动，不自动发布 Release，不需要提供签名秘密，不创建服务器。API 输入通过环境变量传递并校验，避免直接插入 shell 脚本。HTTPS URL 校验不能替代服务端鉴权或安全审计。
+## 本轮实际验证记录（2026-10-10）
 
-## 原生权限与隐私边界
+| 检查 | 结果 |
+| --- | --- |
+| `flutter analyze --no-pub` | 通过，0 个问题 |
+| `flutter test --no-pub --reporter expanded` | 32 项通过；1 项截图测试默认跳过；0 项失败 |
+| `node --test server/server.test.mjs` | 10 项通过，0 项失败 |
+| 显式启用 `CAPTURE_PREVIEWS` 的截图测试 | 1 项通过；生成并查看 14 张页面/状态预览和 16 张活动详情 |
+| Android debug 分架构构建 | arm64、armv7、x86_64 均通过；最终构建包含密码要求与确认文案修正 |
+| APK 签名与元信息 | 三包 `apksigner verify` 通过；应用名“支线”，包名 `app.sidequest.sidequest`，版本 `0.1.1`，min/target SDK 24/36 |
+| Android 实体设备 | `adb devices` 无连接设备；没有声称真机验收通过 |
 
-- Android / iOS 应用显示名为“支线”。
-- 本轮文字体验不请求定位、摄像头、麦克风、相册权限，不追踪轨迹。
-- Android 禁用自动备份，并排除云备份及设备迁移中的应用文件、数据库和偏好数据。设备厂商及被 root 设备的行为不属于应用可保证的范围。
-- 发布配置禁止 HTTP；只有 Android debug 的明确回环地址允许本机联调。
-- Android release 签名未配置，避免误把 debug key 当作生产发布证书。
-- 图片、音频、视频、定时通知需后续分别实现并测试，不能把 UI 中的计划/规则当成已可用能力。
+布局矩阵使用实际控件几何位置、滚动范围及 hit-test 验证可见和可点击；覆盖 16 条详情固定操作、小屏、大字号及 300dp 键盘 inset。键盘测试还实际输入昵称/密码、验证同意项及重复账号/错误密码反馈，并输入 300 字、验证第 301 字被拒绝、保存草稿。
 
-## iOS 后续
+本地 `artifacts/v0.1.1/` 保存 `flutter-analyze.log`、`flutter-test.log`、`node-test.log`、`preview-test.log`、`android-build.log`、`android-verification.log` 和 `SHA256SUMS`。以下哈希对应本次最终本机构建；其他环境重新构建的 debug APK 不保证字节一致。
 
-`ios/` 与 Android 共用 Flutter 源码，但平台权限、系统选择器、键盘和分享面板会有差异。本轮 Windows 环境无法完成 iOS 模拟器或真机验证。未来需 macOS/Xcode 构建；真机安装仍需有效签名/开发团队配置，未上架不代表可以跳过签名。此仓库暂不包含 iOS 签名或发布 workflow。
+```text
+6e89aefee94965f8dc7dc78a813e2ca962456b06ba40a6b343032762f30ecf70  sidequest-android-v0.1.1-arm64.apk
+ac74d2eedf43b906c99a4718f8bb29e34853ecd6b5ce5715f42f1057038cc6d1  sidequest-android-v0.1.1-armv7.apk
+4ab7dd497664ffef033922f0a64b8773175587fa0ef83bf2eee4845d12a5755e  sidequest-android-v0.1.1-x86_64.apk
+```

@@ -69,6 +69,8 @@ jobs:
         run: flutter analyze
       - name: Test
         run: flutter test
+      - name: Node API integration tests
+        run: node --test server/server.test.mjs
       - name: Build debug APKs
         shell: bash
         run: |
