@@ -222,7 +222,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
       return;
     }
     if (quest.id != selectedId || state!.canRequestNext) {
-      toast('已恢复这个账号的任务进度，请从首页继续。');
+      toast('已恢复这个账号的进度，请从首页继续。');
       return;
     }
     if (state!.activeQuestId == null && !await change(repo.claim)) return;
@@ -244,8 +244,8 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         context: context,
         builder: (context) => AlertDialog(
           icon: const Icon(Icons.spa_outlined, color: forest, size: 48),
-          title: const Text('今天多了一点不一样。'),
-          content: const Text('这次发现已私密收进探索册。今天就到这里也很好，还想探索可以再领一条。'),
+          title: const Text('已保存到探索册'),
+          content: const Text('可以在探索册查看，也可以继续探索。'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -256,7 +256,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
                 setState(() => tab = 1);
                 Navigator.pop(context);
               },
-              child: const Text('看看探索册'),
+              child: const Text('查看探索册'),
             ),
           ],
         ),
@@ -268,26 +268,16 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
     if (!await authenticate() || !mounted) return;
     if (!await change(repo.load) || !mounted) return;
     if (!state!.replacementAvailable) {
-      toast('今天的换题机会已用完。仍可随时停止任务。');
+      toast('今天已经换过一次。现在不合适，可以先放一放。');
       return;
     }
-    if (await confirm(
-      context,
-      '换一条支线？',
-      '每天可以换题一次，换题会清空当前任务的文字草稿。没有惩罚，也不要求完成不合适的任务。',
-      '确认换题',
-    )) {
-      if (await change(repo.replace)) toast('已换一条，今天剩余 0 次。');
+    if (await confirm(context, '换个活动？', '每天可更换一次，更换后当前草稿会清空。', '换个活动')) {
+      if (await change(repo.replace)) toast('已更换，今天的更换次数已用完。');
     }
   }
 
   Future<void> stop() async {
-    if (await confirm(
-      context,
-      '先停在这里？',
-      '停止不会扣分，也不会增加换题次数。之后可以重新领取这条支线，文字草稿会保留。',
-      '停止任务',
-    )) {
+    if (await confirm(context, '先放一放？', '草稿会保留，之后可以继续。', '先放一放')) {
       await change(repo.stop);
     }
   }
@@ -356,6 +346,9 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
 
   Widget onboardingPage() {
     final isRole = onboarding == 0;
+    final media = MediaQuery.of(context);
+    final singleColumn =
+        media.size.width < 360 || media.textScaler.scale(1) > 1.2;
     return Scaffold(
       appBar: AppBar(
         leading: !isRole
@@ -376,137 +369,244 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         ],
       ),
       body: SafeArea(
+        top: false,
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 600),
-            child: ListView(
+            child: KeyedSubtree(
               key: ValueKey(onboarding),
-              padding: const EdgeInsets.all(24),
-              children: [
-                const SizedBox(height: 12),
-                Text(isRole ? '此刻，你的生活角色？' : '你更喜欢怎样探索？', style: heading),
-                const SizedBox(height: 10),
-                Text(
-                  isRole ? '选一个现在最贴近的身份，之后随时可改。' : '最多选 3 项，也可以跳过。不是性格测试。',
-                  style: secondary,
-                ),
-                const SizedBox(height: 26),
-                if (isRole)
-                  ...roles.asMap().entries.map((entry) {
-                    final option = entry.value;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(18),
-                        onTap: () => setState(() => role = option.id),
-                        child: Container(
-                          padding: const EdgeInsets.all(17),
-                          decoration: BoxDecoration(
-                            color: role == option.id ? pale : Colors.white,
-                            border: Border.all(
-                              color: role == option.id ? forest : border,
+              child: ListView(
+                key: const ValueKey('onboarding-scroll'),
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+                children: [
+                  Text(isRole ? '此刻，你的生活角色？' : '你更喜欢怎样探索？', style: heading),
+                  const SizedBox(height: 6),
+                  Text(
+                    isRole
+                        ? '选一个现在最贴近的身份，之后随时可改。'
+                        : '选择你喜欢的方式，之后可以修改。最多选 3 项，也可以跳过。',
+                    style: secondary,
+                  ),
+                  const SizedBox(height: 14),
+                  if (isRole)
+                    ...roles.asMap().entries.map((entry) {
+                      final option = entry.value;
+                      final selected = role == option.id;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Semantics(
+                          button: true,
+                          selected: selected,
+                          child: Material(
+                            color: selected ? pale : Colors.white,
+                            shape: RoundedRectangleBorder(
+                              side: BorderSide(
+                                color: selected ? forest : border,
+                              ),
+                              borderRadius: BorderRadius.circular(15),
                             ),
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(roleIcons[entry.key], color: forest),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      option.label,
-                                      style: const TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w600,
+                            clipBehavior: Clip.antiAlias,
+                            child: InkWell(
+                              key: ValueKey('role-${option.id}'),
+                              onTap: () => setState(() => role = option.id),
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  minHeight: 52,
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 7,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        roleIcons[entry.key],
+                                        color: forest,
+                                        size: 21,
                                       ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      option.subtitle,
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: muted,
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              option.label,
+                                              style: const TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            if (selected) ...[
+                                              const SizedBox(height: 1),
+                                              Text(
+                                                option.subtitle,
+                                                style: const TextStyle(
+                                                  fontSize: 11,
+                                                  height: 1.3,
+                                                  color: muted,
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
                                       ),
-                                    ),
-                                  ],
+                                      const SizedBox(width: 8),
+                                      Icon(
+                                        selected
+                                            ? Icons.check_circle
+                                            : Icons.circle_outlined,
+                                        color: selected ? forest : border,
+                                        size: 20,
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
-                              if (role == option.id)
-                                const Icon(Icons.check_circle, color: forest),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  })
-                else
-                  ...preferences.map((preference) {
-                    final checked = selectedPreferences.contains(preference);
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: FilterChip(
-                        label: SizedBox(
-                          width: double.infinity,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            child: Text(
-                              preference,
-                              style: const TextStyle(fontSize: 16),
                             ),
                           ),
                         ),
-                        selected: checked,
-                        selectedColor: lime,
-                        showCheckmark: true,
-                        onSelected: (selected) {
-                          if (selected && selectedPreferences.length >= 3) {
-                            toast('最多选择 3 项，也可以不选。');
-                            return;
-                          }
-                          setState(
-                            () => selected
-                                ? selectedPreferences.add(preference)
-                                : selectedPreferences.remove(preference),
-                          );
-                        },
+                      );
+                    })
+                  else
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        const gap = 8.0;
+                        final itemWidth = singleColumn
+                            ? constraints.maxWidth
+                            : (constraints.maxWidth - gap) / 2;
+                        return Wrap(
+                          spacing: gap,
+                          runSpacing: gap,
+                          children: preferences.map((preference) {
+                            final checked = selectedPreferences.contains(
+                              preference,
+                            );
+                            return SizedBox(
+                              width: itemWidth,
+                              child: Semantics(
+                                button: true,
+                                selected: checked,
+                                child: Material(
+                                  color: checked ? lime : Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                    side: BorderSide(
+                                      color: checked ? forest : border,
+                                    ),
+                                    borderRadius: BorderRadius.circular(15),
+                                  ),
+                                  clipBehavior: Clip.antiAlias,
+                                  child: InkWell(
+                                    key: ValueKey('preference-$preference'),
+                                    onTap: () {
+                                      if (!checked &&
+                                          selectedPreferences.length >= 3) {
+                                        toast('最多选择 3 项，也可以不选。');
+                                        return;
+                                      }
+                                      setState(
+                                        () => checked
+                                            ? selectedPreferences.remove(
+                                                preference,
+                                              )
+                                            : selectedPreferences.add(
+                                                preference,
+                                              ),
+                                      );
+                                    },
+                                    child: ConstrainedBox(
+                                      constraints: const BoxConstraints(
+                                        minHeight: 52,
+                                      ),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 14,
+                                          vertical: 8,
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                preference,
+                                                style: const TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Icon(
+                                              checked
+                                                  ? Icons.check_circle
+                                                  : Icons.circle_outlined,
+                                              size: 20,
+                                              color: checked ? forest : border,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        );
+                      },
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+      bottomNavigationBar: ColoredBox(
+        color: paper,
+        child: SafeArea(
+          top: false,
+          child: Center(
+            heightFactor: 1,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 600),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 10),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FilledButton(
+                      key: const ValueKey('onboarding-next-action'),
+                      onPressed: busy || role.isEmpty
+                          ? null
+                          : isRole
+                          ? () => setState(() => onboarding = 1)
+                          : finishOnboarding,
+                      child: Text(
+                        busy
+                            ? '正在保存…'
+                            : isRole
+                            ? '下一步'
+                            : '完成选择 · 开始探索',
                       ),
-                    );
-                  }),
-                const SizedBox(height: 16),
-                const Notice(
-                  icon: Icons.spa_outlined,
-                  title: '先从一件小事开始',
-                  text: '所有任务都保持轻松。身份只调整场景，偏好不会提高难度，也不强迫社交。',
+                    ),
+                    if (!isRole)
+                      TextButton(
+                        key: const ValueKey('preferences-skip-action'),
+                        style: TextButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 48),
+                        ),
+                        onPressed: busy
+                            ? null
+                            : () {
+                                selectedPreferences = [];
+                                finishOnboarding();
+                              },
+                        child: const Text('跳过，直接开始'),
+                      ),
+                  ],
                 ),
-                const SizedBox(height: 24),
-                FilledButton(
-                  onPressed: busy || role.isEmpty
-                      ? null
-                      : isRole
-                      ? () => setState(() => onboarding = 1)
-                      : finishOnboarding,
-                  child: Text(
-                    busy
-                        ? '正在保存…'
-                        : isRole
-                        ? '下一步'
-                        : '完成选择 · 开始探索',
-                  ),
-                ),
-                if (!isRole)
-                  TextButton(
-                    onPressed: busy
-                        ? null
-                        : () {
-                            selectedPreferences = [];
-                            finishOnboarding();
-                          },
-                    child: const Text('跳过，轻松开始'),
-                  ),
-              ],
+              ),
             ),
           ),
         ),
@@ -518,15 +618,16 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
     final active = state!.activeQuestId != null;
     final now = DateTime.now();
     return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+      key: const ValueKey('today-scroll'),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
       children: [
         Row(
           children: [
             const Text(
               '支线',
-              style: TextStyle(fontSize: 27, fontWeight: FontWeight.w700),
+              style: TextStyle(fontSize: 25, fontWeight: FontWeight.w700),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 10),
             const Expanded(
               child: Text(
                 'SIDE QUEST',
@@ -538,20 +639,23 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
               ),
             ),
             Container(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(8),
               decoration: const BoxDecoration(
                 color: lime,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.spa_outlined, color: forest, size: 24),
+              child: const Icon(Icons.spa_outlined, color: forest, size: 22),
             ),
           ],
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 10),
         Text('${now.month} 月 ${now.day} 日 · 给自己留一点空白', style: secondary),
-        const SizedBox(height: 12),
-        const Text('给日常一点新鲜。', style: heading),
-        const SizedBox(height: 14),
+        const SizedBox(height: 5),
+        const Text(
+          '给日常一点新鲜。',
+          style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 9),
         Wrap(
           spacing: 8,
           runSpacing: 6,
@@ -560,24 +664,28 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
             ...selectedPreferences.take(2).map(Pill.new),
           ],
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 14),
         if (state!.canRequestNext) ...[
-          const BotanicalScene(height: 165),
-          const SizedBox(height: 24),
+          const BotanicalScene(height: 120),
+          const SizedBox(height: 14),
           const Text(
             '今天，已经有了小发现。',
-            style: TextStyle(fontSize: 23, fontWeight: FontWeight.w700),
+            style: TextStyle(fontSize: 21, fontWeight: FontWeight.w700),
           ),
-          const SizedBox(height: 10),
-          const Text('就到这里也很好。还有兴致的话，再遇见一条支线。', style: secondary),
-          const SizedBox(height: 20),
-          FilledButton(
-            onPressed: busy ? null : () => change(repo.nextQuest),
-            child: const Text('再领一条 · 自愿加一点新鲜'),
+          const SizedBox(height: 6),
+          const Text('就到这里也很好，想继续时再看看。', style: secondary),
+          const SizedBox(height: 14),
+          KeyedSubtree(
+            key: const ValueKey('next-quest-action'),
+            child: FilledButton(
+              key: const ValueKey('today-primary-action'),
+              onPressed: busy ? null : () => change(repo.nextQuest),
+              child: const Text('继续探索'),
+            ),
           ),
           TextButton(
             onPressed: () => setState(() => tab = 1),
-            child: const Text('去看看我的探索册'),
+            child: const Text('查看探索册'),
           ),
         ] else ...[
           Container(
@@ -592,29 +700,29 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
               children: [
                 Stack(
                   children: [
-                    const BotanicalScene(height: 175),
+                    const BotanicalScene(height: 120),
                     Positioned(
-                      left: 18,
-                      top: 16,
-                      child: Pill(active ? '进行中的支线' : '今日推荐', color: paper),
+                      left: 14,
+                      top: 12,
+                      child: Pill(active ? '正在进行' : '今日推荐', color: paper),
                     ),
                   ],
                 ),
                 Padding(
-                  padding: const EdgeInsets.all(20),
+                  padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         quest.title,
                         style: const TextStyle(
-                          fontSize: 24,
+                          fontSize: 22,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 6),
                       Text(quest.subtitle, style: secondary),
-                      const SizedBox(height: 15),
+                      const SizedBox(height: 10),
                       Wrap(
                         spacing: 16,
                         runSpacing: 8,
@@ -623,10 +731,11 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
                           const IconLabel(Icons.spa_outlined, '轻松 · 无需走远'),
                         ],
                       ),
-                      const SizedBox(height: 22),
+                      const SizedBox(height: 14),
                       FilledButton(
+                        key: const ValueKey('today-primary-action'),
                         onPressed: busy ? null : openQuest,
-                        child: Text(active ? '继续这条支线' : '看看这条支线'),
+                        child: Text(active ? '继续记录' : '查看详情'),
                       ),
                     ],
                   ),
@@ -634,26 +743,69 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
               ],
             ),
           ),
-          const SizedBox(height: 8),
-          TextButton(
-            onPressed: busy || !state!.replacementAvailable ? null : replace,
-            child: Text(
-              '换一个任务 ↻  ·  今日剩余 ${state!.replacementAvailable ? '1' : '0'} 次',
-            ),
-          ),
+          const SizedBox(height: 2),
           if (active)
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    key: const ValueKey('replace-quest-action'),
+                    style: TextButton.styleFrom(minimumSize: const Size(0, 48)),
+                    onPressed: busy || !state!.replacementAvailable
+                        ? null
+                        : replace,
+                    child: Text(
+                      '换个活动 · ${state!.replacementAvailable ? '剩 1 次' : '今天已换'}',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: TextButton(
+                    key: const ValueKey('stop-quest-action'),
+                    style: TextButton.styleFrom(minimumSize: const Size(0, 48)),
+                    onPressed: busy ? null : stop,
+                    child: const Text('先放一放', style: TextStyle(color: muted)),
+                  ),
+                ),
+              ],
+            )
+          else
             TextButton(
-              onPressed: busy ? null : stop,
-              child: const Text('不方便？可以先停止', style: TextStyle(color: muted)),
+              key: const ValueKey('replace-quest-action'),
+              style: TextButton.styleFrom(
+                minimumSize: const Size(double.infinity, 48),
+              ),
+              onPressed: busy || !state!.replacementAvailable ? null : replace,
+              child: Text(
+                '换个活动 · 今日剩余 ${state!.replacementAvailable ? '1' : '0'} 次',
+              ),
             ),
         ],
-        const SizedBox(height: 14),
-        Notice(
-          icon: Icons.auto_awesome_outlined,
-          title: '已经收集 ${state!.entries.length} 次小发现',
-          text: '每天推荐一条，完成后可继续领取。没有连续打卡，也不需要和谁比较。',
+        const SizedBox(height: 6),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: pale,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.auto_awesome_outlined, color: forest, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '探索册已有 ${state!.entries.length} 条记录',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 8),
         Text(
           repo.isRemote ? '联网测试版 · 记录仅本人可访问' : '本机体验版 · 账号与记录仅在这台设备，尚未云同步',
           textAlign: TextAlign.center,
@@ -664,17 +816,18 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
   }
 
   Widget journal() => ListView(
-    padding: const EdgeInsets.all(24),
+    key: const ValueKey('journal-scroll'),
+    padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
     children: [
       const Text('我的探索册', style: heading),
-      const SizedBox(height: 10),
+      const SizedBox(height: 5),
       const Text('把普通日子，收成自己的小收藏。', style: secondary),
-      const SizedBox(height: 24),
+      const SizedBox(height: 14),
       Container(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
         decoration: BoxDecoration(
           color: forest,
-          borderRadius: BorderRadius.circular(22),
+          borderRadius: BorderRadius.circular(18),
         ),
         child: Row(
           children: [
@@ -685,12 +838,12 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
                   Text(
                     '${state!.entries.length.toString().padLeft(2, '0')}  条小发现',
                     style: const TextStyle(
-                      fontSize: 25,
+                      fontSize: 22,
                       color: Colors.white,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 5),
                   const Text(
                     '只有你，拥有这本探索册。',
                     style: TextStyle(color: lime, fontSize: 12),
@@ -698,39 +851,40 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
                 ],
               ),
             ),
-            const Icon(Icons.spa_outlined, size: 42, color: lime),
+            const Icon(Icons.spa_outlined, size: 34, color: lime),
           ],
         ),
       ),
-      const SizedBox(height: 22),
+      const SizedBox(height: 12),
       const IconLabel(Icons.lock_outline, '默认私密，不会自动公开'),
-      const SizedBox(height: 20),
+      const SizedBox(height: 12),
       if (state!.entries.isEmpty) ...[
-        const SizedBox(height: 30),
-        const Icon(Icons.menu_book_outlined, size: 54, color: muted),
-        const SizedBox(height: 20),
+        const SizedBox(height: 12),
+        const Icon(Icons.menu_book_outlined, size: 44, color: muted),
+        const SizedBox(height: 12),
         const Text(
           '下一次发现，留一页给它。',
           textAlign: TextAlign.center,
           style: secondary,
         ),
-        const SizedBox(height: 25),
+        const SizedBox(height: 14),
         OutlinedButton(
+          key: const ValueKey('journal-empty-action'),
           onPressed: () => setState(() => tab = 0),
-          child: const Text('去遇见今天的支线'),
+          child: const Text('看看今天的活动'),
         ),
       ],
       ...state!.entries.reversed.map(
         (entry) => Padding(
-          padding: const EdgeInsets.only(bottom: 14),
+          padding: const EdgeInsets.only(bottom: 10),
           child: Material(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(17),
             child: InkWell(
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(17),
               onTap: () => entryDetail(entry),
               child: Padding(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -750,14 +904,14 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
                         const Icon(Icons.chevron_right, color: muted),
                       ],
                     ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 9),
                     Text(
                       entry.text,
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(height: 1.6),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 10),
                     Text(
                       formatDate(entry.createdAt),
                       style: const TextStyle(fontSize: 12, color: muted),
@@ -780,60 +934,23 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
     if (deleted == true) await change(repo.load);
   }
 
-  Widget profile() => ListView(
-    padding: const EdgeInsets.all(24),
-    children: [
-      const Text('我的', style: heading),
-      const SizedBox(height: 24),
-      Row(
-        children: [
-          const CircleAvatar(
-            radius: 30,
-            backgroundColor: lime,
-            child: Icon(Icons.person_outline, size: 34, color: forest),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  state!.profile?.nickname ?? '还没起名字的探索者',
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(repo.isRemote ? '联网账号' : '仅本机测试账号', style: secondary),
-              ],
-            ),
-          ),
-        ],
-      ),
-      const SizedBox(height: 26),
-      if (state!.profile == null)
-        FilledButton(onPressed: authenticate, child: const Text('登录 / 创建昵称')),
-      const SizedBox(height: 14),
+  Widget profile() {
+    final settings = <Widget>[
       menu(
         Icons.tune,
         '身份与探索偏好',
-        '随时调整，不增加任务难度',
+        '随时调整，不增加探索难度',
         () => setState(() => onboarding = 0),
       ),
       menu(
-        Icons.notifications_none,
-        '提醒',
-        '默认关闭 · 初版暂不发送通知',
-        () => info(context, '提醒尚未启用', '初版不申请通知权限、不发送推送。后续加入用户主动开启和自选提醒时间。'),
-      ),
-      menu(
-        Icons.photo_outlined,
-        '媒体与记录规则',
-        '文字可用 · 媒体入口待开放',
+        Icons.info_outline,
+        '版本说明',
+        '0.1.1 · 文字测试版',
         () => Navigator.push(
           context,
-          MaterialPageRoute<void>(builder: (_) => const RulesPage()),
+          MaterialPageRoute<void>(
+            builder: (_) => VersionPage(remote: repo.isRemote),
+          ),
         ),
       ),
       menu(
@@ -847,57 +964,135 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
           ),
         ),
       ),
-      if (state!.profile != null) ...[
-        menu(
-          Icons.file_download_outlined,
-          '导出我的记录',
-          '导出 JSON，不包含密码或登录凭据',
-          exportRecords,
-        ),
-        menu(Icons.logout, '退出登录', '设备上的账号与记录仍然保留', () async {
-          if (await confirm(
-            context,
-            '退出登录？',
-            '再次登录需要昵称和密码。当前任务与文字草稿不会删除。',
-            '退出登录',
-          )) {
-            await change(repo.logout);
-          }
-        }),
-        menu(Icons.delete_outline, '删除账号与全部记录', '不可恢复，需要验证密码', deleteAccount),
-      ],
-      const SizedBox(height: 24),
-      Notice(
-        icon: Icons.science_outlined,
-        title: '支线 0.1.0 · 文字体验版',
-        text: repo.isRemote
-            ? '已配置联网服务。媒体、通知与密码找回尚未开放，请勿存放敏感内容。'
-            : '账号昵称仅在本安装内查重，不是全网唯一。记录保存在应用私有目录，尚未额外加密；卸载会丢失，不适合存放敏感信息。',
+    ];
+    final account = <Widget>[
+      menu(
+        Icons.file_download_outlined,
+        '导出我的记录',
+        '导出 JSON，不包含密码或登录凭据',
+        exportRecords,
       ),
-    ],
+      menu(Icons.logout, '退出登录', '设备上的账号与记录仍然保留', () async {
+        if (await confirm(
+          context,
+          '退出登录？',
+          '再次登录需要昵称和密码。当前活动与文字草稿不会删除。',
+          '退出登录',
+        )) {
+          await change(repo.logout);
+        }
+      }),
+      menu(
+        Icons.delete_outline,
+        '删除账号与全部记录',
+        '不可恢复，需要验证密码',
+        deleteAccount,
+        danger: true,
+      ),
+    ];
+    return ListView(
+      key: const ValueKey('profile-scroll'),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+      children: [
+        const Text('我的', style: heading),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            const CircleAvatar(
+              radius: 25,
+              backgroundColor: lime,
+              child: Icon(Icons.person_outline, size: 28, color: forest),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    state!.profile?.nickname ?? '还没起名字的探索者',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(repo.isRemote ? '联网账号' : '仅本机测试账号', style: secondary),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        if (state!.profile == null) ...[
+          FilledButton(
+            key: const ValueKey('profile-login-action'),
+            onPressed: authenticate,
+            child: const Text('登录 / 创建昵称'),
+          ),
+          const SizedBox(height: 12),
+        ],
+        menuGroup(settings),
+        if (state!.profile != null) ...[
+          const SizedBox(height: 12),
+          menuGroup(account),
+        ],
+        const SizedBox(height: 10),
+        Text(
+          repo.isRemote ? '联网文字体验版 · 请勿存放敏感内容' : '本机文字体验版 · 数据仅在当前安装中',
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 11, color: muted),
+        ),
+      ],
+    );
+  }
+
+  Widget menuGroup(List<Widget> items) => Material(
+    color: Colors.white,
+    borderRadius: BorderRadius.circular(18),
+    clipBehavior: Clip.antiAlias,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var index = 0; index < items.length; index++) ...[
+          items[index],
+          if (index != items.length - 1)
+            const Divider(height: 1, indent: 52, endIndent: 14),
+        ],
+      ],
+    ),
   );
+
   Widget menu(
     IconData icon,
     String title,
     String subtitle,
-    VoidCallback onTap,
-  ) => Padding(
-    padding: const EdgeInsets.only(bottom: 10),
-    child: Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(18),
-      child: ListTile(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-        leading: Icon(icon, color: forest),
-        title: Text(title, style: const TextStyle(fontSize: 15)),
-        subtitle: Text(
-          subtitle,
-          style: const TextStyle(fontSize: 11, color: muted),
-        ),
-        trailing: const Icon(Icons.chevron_right, size: 20, color: muted),
-        onTap: busy ? null : onTap,
+    VoidCallback onTap, {
+    bool danger = false,
+  }) => ConstrainedBox(
+    constraints: const BoxConstraints(minHeight: 54),
+    child: ListTile(
+      dense: true,
+      visualDensity: const VisualDensity(vertical: -2),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+      leading: Icon(
+        icon,
+        color: danger ? Theme.of(context).colorScheme.error : forest,
+        size: 22,
       ),
+      title: Text(
+        title,
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
+          color: danger ? Theme.of(context).colorScheme.error : ink,
+        ),
+      ),
+      subtitle: Text(
+        subtitle,
+        style: const TextStyle(fontSize: 11, height: 1.3, color: muted),
+      ),
+      trailing: const Icon(Icons.chevron_right, size: 20, color: muted),
+      onTap: busy ? null : onTap,
     ),
   );
   Future<void> exportRecords() async {

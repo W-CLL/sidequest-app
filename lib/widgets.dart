@@ -9,11 +9,11 @@ const muted = Color(0xFF69756C);
 const border = Color(0xFFE2E6DB);
 const heading = TextStyle(
   fontSize: 27,
-  height: 1.4,
+  height: 1.25,
   fontWeight: FontWeight.w700,
   color: ink,
 );
-const secondary = TextStyle(fontSize: 13, height: 1.6, color: muted);
+const secondary = TextStyle(fontSize: 13, height: 1.45, color: muted);
 const roleIcons = [
   Icons.school_outlined,
   Icons.work_outline,
@@ -72,13 +72,17 @@ class Notice extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.text,
+    this.compact = false,
   });
   final IconData icon;
   final String title, text;
+  final bool compact;
   @override
   Widget build(BuildContext context) => Container(
     width: double.infinity,
-    padding: const EdgeInsets.all(18),
+    padding: compact
+        ? const EdgeInsets.symmetric(horizontal: 14, vertical: 12)
+        : const EdgeInsets.all(18),
     decoration: BoxDecoration(
       color: pale,
       borderRadius: BorderRadius.circular(18),
@@ -86,26 +90,26 @@ class Notice extends StatelessWidget {
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, color: forest, size: 22),
-        const SizedBox(width: 12),
+        Icon(icon, color: forest, size: compact ? 20 : 22),
+        SizedBox(width: compact ? 10 : 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 title,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w600,
-                  fontSize: 14,
+                  fontSize: compact ? 13 : 14,
                 ),
               ),
-              const SizedBox(height: 8),
+              SizedBox(height: compact ? 4 : 8),
               Text(
                 text,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
                   color: muted,
-                  height: 1.65,
+                  height: compact ? 1.4 : 1.65,
                 ),
               ),
             ],
@@ -133,7 +137,7 @@ Future<bool> confirm(
             child: const Text('取消'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(minimumSize: const Size(80, 44)),
+            style: FilledButton.styleFrom(minimumSize: const Size(80, 52)),
             onPressed: () => Navigator.pop(context, true),
             child: Text(action),
           ),
