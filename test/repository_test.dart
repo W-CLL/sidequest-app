@@ -318,6 +318,18 @@ void main() {
     expect(api.calls.map((c) => c.path), ['/api/health']);
     expect(tokens.token, isNull);
   });
+  test('concurrent dispose calls share and await the same close', () async {
+    await register();
+    await repo.claim();
+
+    final first = repo.dispose();
+    final second = repo.dispose();
+
+    expect(identical(first, second), isTrue);
+    await second;
+    await first;
+    await expectLater(store.database, throwsStateError);
+  });
   test('offline draft and completed record remain durable', () async {
     await register();
     api.online = false;

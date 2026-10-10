@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -603,6 +604,154 @@ void main() {
       expect(await store.pendingCommandCount(account.id), 1);
     },
   );
+
+  test(
+    'closed wrappers cannot reopen and close waits for an opening connection',
+    () async {
+      final openingStore = createStore();
+      final opening = openingStore.database;
+      final closing = openingStore.close();
+      final db = await opening;
+      await closing;
+      expect(db.isOpen, isFalse);
+      await openingStore.close();
+      await expectLater(openingStore.database, throwsStateError);
+      await expectLater(openingStore.activeAccount(), throwsStateError);
+      await expectLater(openingStore.mediaRootPath, throwsStateError);
+      expect((await store.activeAccount())!.id, account.id);
+    },
+  );
+
+  test(
+    'closing an unsuccessfully opening wrapper does not repeat the open error',
+    () async {
+      final corrupt = File(p.join(directory.path, 'invalid.sqlite'));
+      await corrupt.writeAsString('not a sqlite database', flush: true);
+      final broken = OfflineStore(
+        databaseFactory: databaseFactoryFfi,
+        databasePath: corrupt.path,
+      );
+      final opening = expectLater(
+        broken.database,
+        throwsA(isA<DatabaseException>()),
+      );
+      await Future.wait([opening, broken.close()]);
+      await broken.close();
+      await expectLater(broken.database, throwsStateError);
+    },
+  );
+
+  test(
+    'two connections serialize high-frequency reads writes and lease work',
+    () async {
+      await store.close();
+      OfflineStore freshStore() => OfflineStore(
+        databaseFactory: databaseFactoryFfi,
+        databasePath: p.join(directory.path, 'concurrent.sqlite'),
+        mediaRoot: p.join(directory.path, 'private'),
+        namespace: 'service-a',
+        now: () => now,
+      );
+      store = freshStore();
+      final other = freshStore();
+      try {
+        // Both wrappers open and configure the same initially absent schema.
+        final connections = await Future.wait([store.database, other.database]);
+        expect(identical(connections[0], connections[1]), isFalse);
+        account = await store.activateFromCloud(cloud());
+        await Future.wait([
+          () async {
+            for (var i = 0; i < 80; i++) {
+              await command('foreground-$i');
+              await store.markRequiresLogin(account.id, i.isOdd);
+            }
+          }(),
+          () async {
+            for (var i = 0; i < 80; i++) {
+              await other.mutateWithCommand(
+                accountId: account.id,
+                snapshot: account.snapshot,
+                commandId: 'background-$i',
+                type: 'draft',
+                payload: {
+                  'questId': 'green',
+                  'text': 'draft-$i',
+                  'mediaIds': [],
+                },
+              );
+              await other.authorizeMeteredSnapshot(account.id);
+            }
+          }(),
+          () async {
+            for (var i = 0; i < 100; i++) {
+              final reads = await Future.wait([
+                store.activeAccount(),
+                other.activeAccount(),
+                store.summary(account.id),
+                other.summary(account.id),
+              ]);
+              expect((reads[0] as OfflineAccount).id, account.id);
+              expect((reads[1] as OfflineAccount).id, account.id);
+            }
+          }(),
+          () async {
+            for (var i = 0; i < 80; i++) {
+              expect(await other.acquireLease('background-worker'), isTrue);
+              expect(await store.acquireLease('foreground-worker'), isFalse);
+              expect(await other.renewLease('background-worker'), isTrue);
+              expect(await store.ownsLease('background-worker'), isTrue);
+              await other.releaseLease('background-worker');
+            }
+          }(),
+        ]);
+        expect(await store.pendingCommandCount(account.id), 160);
+        expect(await other.pendingCommandCount(account.id), 160);
+        expect((await store.summary(account.id)).queuedCommands, 160);
+        await other.close();
+        await command('after-background-disposal');
+        expect(await store.pendingCommandCount(account.id), 161);
+      } finally {
+        await other.close();
+      }
+    },
+  );
+
+  test('native SQLite contention retries asynchronously after the owner releases', () async {
+    final other = createStore();
+    final acquired = Completer<void>();
+    final release = Completer<void>();
+    Future<void>? owner;
+    try {
+      final db = await other.database;
+      // Bypass the in-isolate queue to simulate a writer in another isolate or
+      // process. A native blocking busy timeout would prevent this timer firing.
+      owner = db.transaction((txn) async {
+        await txn.update(
+          'accounts',
+          {'requires_login': 1},
+          where: 'account_id = ?',
+          whereArgs: [account.id],
+        );
+        acquired.complete();
+        await release.future;
+      });
+      await acquired.future;
+      final timer = Timer(const Duration(milliseconds: 80), release.complete);
+      try {
+        await command('after-native-contention');
+      } finally {
+        timer.cancel();
+        if (!release.isCompleted) release.complete();
+      }
+      await owner;
+      expect(await store.pendingCommandCount(account.id), 1);
+      expect((await store.activeAccount())!.requiresLogin, isTrue);
+    } finally {
+      if (!release.isCompleted) release.complete();
+      await owner;
+      await other.close();
+    }
+  });
 
   test('record status derives from associated media and mixed media count only once', () async {
     final photo = await media('first.jpg');

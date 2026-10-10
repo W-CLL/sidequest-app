@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -17,6 +18,50 @@ Map<String, dynamic> _jsonMap(Object? value) =>
     Map<String, dynamic>.from(value as Map);
 
 String _canonicalJson(Map<String, dynamic> value) => jsonEncode(value);
+
+// Separate foreground/background connections must not synchronously wait for
+// each other's SQLite lock on the same Dart isolate. Queue whole transactions,
+// not their statements, so a waiting writer cannot block the current owner.
+final _databaseWriteTails = <String, Future<void>>{};
+
+Future<T> _serializeDatabaseWrite<T>(
+  String path,
+  Future<T> Function() action,
+) async {
+  final normalized = p.normalize(p.absolute(path));
+  final key = Platform.isWindows ? normalized.toLowerCase() : normalized;
+  final previous = _databaseWriteTails[key];
+  final done = Completer<void>();
+  _databaseWriteTails[key] = done.future;
+  try {
+    if (previous != null) await previous;
+    return await action();
+  } finally {
+    done.complete();
+    if (identical(_databaseWriteTails[key], done.future)) {
+      _databaseWriteTails.remove(key);
+    }
+  }
+}
+
+Future<T> _retryDatabaseBusy<T>(Future<T> Function() action) async {
+  for (var attempt = 0; ; attempt++) {
+    try {
+      return await action();
+    } on DatabaseException catch (error) {
+      final code = error.getResultCode();
+      // Mask extended result codes (e.g. SQLITE_BUSY_SNAPSHOT). Only contention
+      // is retryable; constraint, corruption and closed-connection errors are not.
+      final primaryCode = code == null ? null : code & 0xff;
+      if ((primaryCode != 5 && primaryCode != 6) || attempt >= 49) rethrow;
+      // Other isolates/processes do not share the in-isolate queue. Yield so
+      // their transaction can finish, with a bounded wait of less than 5 seconds.
+      await Future<void>.delayed(
+        Duration(milliseconds: attempt < 9 ? (attempt + 1) * 10 : 100),
+      );
+    }
+  }
+}
 
 class OfflineBranch {
   const OfflineBranch({
@@ -159,6 +204,8 @@ class OfflineStore {
   final DateTime Function() _now;
   Database? _database;
   Future<Database>? _opening;
+  Future<void>? _closing;
+  bool _closed = false;
   String? _resolvedMediaRoot;
 
   Future<String> _resolveDatabasePath() async {
@@ -168,6 +215,7 @@ class OfflineStore {
   }
 
   Future<String> get mediaRootPath async {
+    _ensureOpen();
     if (_resolvedMediaRoot != null) return _resolvedMediaRoot!;
     final root =
         _mediaRoot ??
@@ -180,6 +228,7 @@ class OfflineStore {
   }
 
   Future<Database> get database {
+    if (_closed) return Future.error(StateError('OfflineStore is closed.'));
     if (_database != null) return Future.value(_database);
     return _opening ??= _open();
   }
@@ -187,24 +236,30 @@ class OfflineStore {
   Future<Database> _open() async {
     final path = await _resolveDatabasePath();
     await Directory(p.dirname(path)).create(recursive: true);
-    final db = await _factory.openDatabase(
+    final db = await _serializeDatabaseWrite(
       path,
-      options: OpenDatabaseOptions(
-        version: 4,
-        // Foreground/background wrappers share SQLite data and lease rows, not
-        // a closable connection object. Disposing one must not close another.
-        singleInstance: false,
-        onConfigure: (database) async {
-          await database.execute('PRAGMA foreign_keys = ON');
-          await database.execute('PRAGMA journal_mode = WAL');
-        },
-        onCreate: (database, _) async {
-          await database.execute('''
+      () => _retryDatabaseBusy(() {
+        return _factory.openDatabase(
+          path,
+          options: OpenDatabaseOptions(
+            version: 4,
+            // Foreground/background wrappers share SQLite data and lease rows, not
+            // a closable connection object. Disposing one must not close another.
+            singleInstance: false,
+            onConfigure: (database) async {
+              // A native busy timeout can block the FFI isolate that must release
+              // the lock. The outer asynchronous retry handles native contention.
+              await database.execute('PRAGMA busy_timeout = 0');
+              await database.execute('PRAGMA foreign_keys = ON');
+              await database.execute('PRAGMA journal_mode = WAL');
+            },
+            onCreate: (database, _) async {
+              await database.execute('''
 CREATE TABLE metadata (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 )''');
-          await database.execute('''
+              await database.execute('''
 CREATE TABLE accounts (
   account_id TEXT PRIMARY KEY,
   snapshot_json TEXT NOT NULL,
@@ -212,7 +267,7 @@ CREATE TABLE accounts (
   requires_login INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 )''');
-          await database.execute('''
+              await database.execute('''
 CREATE TABLE branches (
   branch_id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL,
@@ -222,10 +277,10 @@ CREATE TABLE branches (
   updated_at INTEGER NOT NULL,
   FOREIGN KEY(account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
 )''');
-          await database.execute(
-            'CREATE INDEX branches_account ON branches(account_id, created_at)',
-          );
-          await database.execute('''
+              await database.execute(
+                'CREATE INDEX branches_account ON branches(account_id, created_at)',
+              );
+              await database.execute('''
 CREATE TABLE outbox (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   command_id TEXT NOT NULL UNIQUE,
@@ -242,13 +297,13 @@ CREATE TABLE outbox (
   FOREIGN KEY(account_id) REFERENCES accounts(account_id) ON DELETE CASCADE,
   FOREIGN KEY(branch_id) REFERENCES branches(branch_id) ON DELETE CASCADE
 )''');
-          await database.execute(
-            'CREATE INDEX outbox_order ON outbox(account_id, sequence)',
-          );
-          await database.execute(
-            'CREATE INDEX outbox_branch ON outbox(branch_id, sequence)',
-          );
-          await database.execute('''
+              await database.execute(
+                'CREATE INDEX outbox_order ON outbox(account_id, sequence)',
+              );
+              await database.execute(
+                'CREATE INDEX outbox_branch ON outbox(branch_id, sequence)',
+              );
+              await database.execute('''
 CREATE TABLE entries (
   account_id TEXT NOT NULL,
   entry_id TEXT NOT NULL,
@@ -258,10 +313,10 @@ CREATE TABLE entries (
   PRIMARY KEY(account_id, entry_id),
   FOREIGN KEY(account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
 )''');
-          await database.execute(
-            'CREATE INDEX entries_page ON entries(account_id, created_at DESC, entry_id DESC)',
-          );
-          await database.execute('''
+              await database.execute(
+                'CREATE INDEX entries_page ON entries(account_id, created_at DESC, entry_id DESC)',
+              );
+              await database.execute('''
 CREATE TABLE media (
   client_id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL,
@@ -276,20 +331,20 @@ CREATE TABLE media (
   created_at INTEGER NOT NULL,
   FOREIGN KEY(account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
 )''');
-          await database.execute(
-            'CREATE UNIQUE INDEX media_server_id ON media(account_id, server_id) WHERE server_id IS NOT NULL',
-          );
-          await database.execute(
-            'CREATE INDEX media_account ON media(account_id, created_at)',
-          );
-          await database.execute('''
+              await database.execute(
+                'CREATE UNIQUE INDEX media_server_id ON media(account_id, server_id) WHERE server_id IS NOT NULL',
+              );
+              await database.execute(
+                'CREATE INDEX media_account ON media(account_id, created_at)',
+              );
+              await database.execute('''
 CREATE TABLE cleanup_queue (
   path TEXT PRIMARY KEY,
   client_id TEXT,
   source_bytes INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 )''');
-          await database.execute('''CREATE TABLE cleanup_holds (
+              await database.execute('''CREATE TABLE cleanup_holds (
   account_id TEXT NOT NULL,
   entry_id TEXT NOT NULL,
   client_id TEXT NOT NULL,
@@ -297,7 +352,7 @@ CREATE TABLE cleanup_queue (
   FOREIGN KEY(account_id) REFERENCES accounts(account_id) ON DELETE CASCADE,
   FOREIGN KEY(client_id) REFERENCES media(client_id) ON DELETE CASCADE
 )''');
-          await database.execute('''
+              await database.execute('''
 CREATE TABLE request_ids (
   account_id TEXT NOT NULL,
   request_key TEXT NOT NULL,
@@ -305,50 +360,86 @@ CREATE TABLE request_ids (
   PRIMARY KEY(account_id, request_key),
   FOREIGN KEY(account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
 )''');
-          await database.execute('''
+              await database.execute('''
 CREATE TABLE task_leases (
   lease_name TEXT PRIMARY KEY,
   owner TEXT NOT NULL,
   expires_at INTEGER NOT NULL
 )''');
-        },
-        onUpgrade: (database, oldVersion, _) async {
-          if (oldVersion < 2) {
-            await database.execute(
-              'ALTER TABLE outbox ADD COLUMN wire_json TEXT',
-            );
-            await database.execute(
-              'ALTER TABLE media ADD COLUMN staging_path TEXT',
-            );
-            await database.execute(
-              'ALTER TABLE cleanup_queue ADD COLUMN source_bytes INTEGER NOT NULL DEFAULT 0',
-            );
-          }
-          if (oldVersion < 3) {
-            await database.execute('''CREATE TABLE cleanup_holds (
+            },
+            onUpgrade: (database, oldVersion, _) async {
+              if (oldVersion < 2) {
+                await database.execute(
+                  'ALTER TABLE outbox ADD COLUMN wire_json TEXT',
+                );
+                await database.execute(
+                  'ALTER TABLE media ADD COLUMN staging_path TEXT',
+                );
+                await database.execute(
+                  'ALTER TABLE cleanup_queue ADD COLUMN source_bytes INTEGER NOT NULL DEFAULT 0',
+                );
+              }
+              if (oldVersion < 3) {
+                await database.execute('''CREATE TABLE cleanup_holds (
   account_id TEXT NOT NULL, entry_id TEXT NOT NULL, client_id TEXT NOT NULL,
   PRIMARY KEY(account_id, entry_id, client_id),
   FOREIGN KEY(account_id) REFERENCES accounts(account_id) ON DELETE CASCADE,
   FOREIGN KEY(client_id) REFERENCES media(client_id) ON DELETE CASCADE
 )''');
-          }
-          if (oldVersion < 4) {
-            await database.execute(
-              'ALTER TABLE outbox ADD COLUMN last_error TEXT',
-            );
-          }
-        },
-      ),
+              }
+              if (oldVersion < 4) {
+                await database.execute(
+                  'ALTER TABLE outbox ADD COLUMN last_error TEXT',
+                );
+              }
+            },
+          ),
+        );
+      }),
     );
     _database = db;
     return db;
   }
 
-  Future<void> close() async {
-    final db = _database;
-    _database = null;
-    _opening = null;
-    if (db != null) await db.close();
+  void _ensureOpen() {
+    if (_closed) throw StateError('OfflineStore is closed.');
+  }
+
+  Future<T> _write<T>(Database db, Future<T> Function() action) {
+    _ensureOpen();
+    return _serializeDatabaseWrite(db.path, () => _retryDatabaseBusy(action));
+  }
+
+  // Callbacks contain database work only: sqflite rolls back before a retry.
+  Future<T> _transaction<T>(
+    Database db,
+    Future<T> Function(Transaction txn) action,
+  ) => _write(db, () => db.transaction(action));
+
+  Future<void> close() {
+    _closed = true;
+    return _closing ??= _close();
+  }
+
+  Future<void> _close() async {
+    try {
+      Database? db = _database;
+      if (db == null && _opening != null) {
+        try {
+          db = await _opening;
+        } catch (_) {
+          // The caller of database receives the original open failure. There
+          // is no usable connection to close; disposal must not repeat it.
+          return;
+        }
+      }
+      if (db != null) {
+        await _serializeDatabaseWrite(db.path, db.close);
+      }
+    } finally {
+      _database = null;
+      _opening = null;
+    }
   }
 
   Future<String?> activeAccountId() async {
@@ -379,7 +470,7 @@ CREATE TABLE task_leases (
 
   Future<OfflineAccount?> account(String accountId) async {
     final db = await database;
-    return db.transaction((txn) async {
+    return _transaction(db, (txn) async {
       final rows = await txn.query(
         'accounts',
         where: 'account_id = ?',
@@ -460,7 +551,7 @@ CREATE TABLE task_leases (
     if (profile == null) throw StateError('Cannot activate a guest snapshot.');
     final accountKey = _accountKey(profile.id);
     final db = await database;
-    return db.transaction((txn) async {
+    return _transaction(db, (txn) async {
       final accountRows = await txn.query(
         'accounts',
         where: 'account_id = ?',
@@ -565,37 +656,46 @@ CREATE TABLE task_leases (
 
   Future<void> clearActiveAccount() async {
     final db = await database;
-    await db.delete(
-      'metadata',
-      where: 'key = ?',
-      whereArgs: [_activeAccountMetadataKey],
+    await _write(
+      db,
+      () => db.delete(
+        'metadata',
+        where: 'key = ?',
+        whereArgs: [_activeAccountMetadataKey],
+      ),
     );
   }
 
   Future<void> markRequiresLogin(String accountId, bool value) async {
     final db = await database;
-    await db.update(
-      'accounts',
-      {
-        'requires_login': value ? 1 : 0,
-        'updated_at': _now().toUtc().millisecondsSinceEpoch,
-      },
-      where: 'account_id = ?',
-      whereArgs: [accountId],
+    await _write(
+      db,
+      () => db.update(
+        'accounts',
+        {
+          'requires_login': value ? 1 : 0,
+          'updated_at': _now().toUtc().millisecondsSinceEpoch,
+        },
+        where: 'account_id = ?',
+        whereArgs: [accountId],
+      ),
     );
   }
 
   Future<void> saveSnapshot(String accountId, AppSnapshot snapshot) async {
     _validateCloudAccount(accountId, snapshot);
     final db = await database;
-    await db.update(
-      'accounts',
-      {
-        'snapshot_json': jsonEncode(snapshot.toJson()),
-        'updated_at': _now().toUtc().millisecondsSinceEpoch,
-      },
-      where: 'account_id = ?',
-      whereArgs: [accountId],
+    await _write(
+      db,
+      () => db.update(
+        'accounts',
+        {
+          'snapshot_json': jsonEncode(snapshot.toJson()),
+          'updated_at': _now().toUtc().millisecondsSinceEpoch,
+        },
+        where: 'account_id = ?',
+        whereArgs: [accountId],
+      ),
     );
   }
 
@@ -605,7 +705,7 @@ CREATE TABLE task_leases (
   Future<AppSnapshot> adoptCloud(String accountId, AppSnapshot cloud) async {
     _validateCloudAccount(accountId, cloud);
     final db = await database;
-    return db.transaction((txn) async {
+    return _transaction(db, (txn) async {
       final rows = await txn.query(
         'accounts',
         where: 'account_id = ?',
@@ -760,7 +860,7 @@ CREATE TABLE task_leases (
     String? expectedBranchId,
   }) async {
     final db = await database;
-    await db.transaction((txn) async {
+    await _transaction(db, (txn) async {
       final active = await _activeAccountIdIn(txn);
       if (active != accountId) {
         throw StateError('The active account changed before the write.');
@@ -913,7 +1013,7 @@ CREATE TABLE task_leases (
     int limit = 10,
   }) async {
     final db = await database;
-    return db.transaction((txn) async {
+    return _transaction(db, (txn) async {
       final eligibility = wifi || allowMetered
           ? 'batch_id IS NULL'
           : 'batch_id IS NULL AND metered_allowed = 1';
@@ -986,11 +1086,14 @@ WHERE command_id IN ($placeholders)''',
 
   Future<void> releaseBatch(String batchId) async {
     final db = await database;
-    await db.update(
-      'outbox',
-      {'batch_id': null},
-      where: 'batch_id = ?',
-      whereArgs: [batchId],
+    await _write(
+      db,
+      () => db.update(
+        'outbox',
+        {'batch_id': null},
+        where: 'batch_id = ?',
+        whereArgs: [batchId],
+      ),
     );
   }
 
@@ -1000,11 +1103,14 @@ WHERE command_id IN ($placeholders)''',
     String error,
   ) async {
     final db = await database;
-    await db.update(
-      'outbox',
-      {'last_error': error},
-      where: 'account_id = ? AND batch_id = ?',
-      whereArgs: [accountId, batchId],
+    await _write(
+      db,
+      () => db.update(
+        'outbox',
+        {'last_error': error},
+        where: 'account_id = ? AND batch_id = ?',
+        whereArgs: [accountId, batchId],
+      ),
     );
   }
 
@@ -1015,7 +1121,7 @@ WHERE command_id IN ($placeholders)''',
     String? leaseOwner,
   }) async {
     final db = await database;
-    await db.transaction((txn) async {
+    await _transaction(db, (txn) async {
       await _assertLeaseIn(txn, leaseOwner);
       final rows = await txn.query(
         'outbox',
@@ -1051,9 +1157,12 @@ WHERE command_id IN ($placeholders)''',
     final selected = ids.toSet().toList();
     if (selected.isEmpty) return;
     final db = await database;
-    await db.rawUpdate(
-      'UPDATE outbox SET wire_json = NULL WHERE account_id = ? AND command_id IN (${List.filled(selected.length, '?').join(',')})',
-      [accountId, ...selected],
+    await _write(
+      db,
+      () => db.rawUpdate(
+        'UPDATE outbox SET wire_json = NULL WHERE account_id = ? AND command_id IN (${List.filled(selected.length, '?').join(',')})',
+        [accountId, ...selected],
+      ),
     );
   }
 
@@ -1107,7 +1216,7 @@ WHERE command_id IN ($placeholders)''',
     );
     try {
       final db = await database;
-      await db.transaction((txn) async {
+      await _transaction(db, (txn) async {
         if (await _activeAccountIdIn(txn) != accountId) {
           throw const QuestException('账号已变化，请重新添加附件。');
         }
@@ -1158,7 +1267,7 @@ WHERE command_id IN ($placeholders)''',
         await handle.close();
       }
       await File(temporary).rename(destination);
-      await db.transaction((txn) async {
+      await _transaction(db, (txn) async {
         if (await _activeAccountIdIn(txn) != accountId) {
           throw const QuestException('账号已变化，请重新添加附件。');
         }
@@ -1173,7 +1282,7 @@ WHERE command_id IN ($placeholders)''',
     } catch (_) {
       // Persist cleanup first; if deletion itself fails the next worker retries.
       final db = await database;
-      await db.transaction((txn) async {
+      await _transaction(db, (txn) async {
         for (final path in [destination, temporary]) {
           await txn.insert('cleanup_queue', {
             'path': path,
@@ -1248,11 +1357,14 @@ WHERE command_id IN ($placeholders)''',
       if (attachment != null)
         'attachment_json': jsonEncode(attachment.toJson()),
     };
-    await db.update(
-      'media',
-      values,
-      where: 'client_id = ?',
-      whereArgs: [clientId],
+    await _write(
+      db,
+      () => db.update(
+        'media',
+        values,
+        where: 'client_id = ?',
+        whereArgs: [clientId],
+      ),
     );
   }
 
@@ -1275,7 +1387,7 @@ WHERE command_id IN ($placeholders)''',
     bool pending = false,
   }) async {
     final db = await database;
-    await db.transaction((txn) async {
+    await _transaction(db, (txn) async {
       for (final entry in entries) {
         if (!pending) {
           final current = await txn.query(
@@ -1300,10 +1412,13 @@ WHERE command_id IN ($placeholders)''',
 
   Future<void> removeSavedEntry(String accountId, String entryId) async {
     final db = await database;
-    await db.delete(
-      'entries',
-      where: 'account_id = ? AND entry_id = ?',
-      whereArgs: [accountId, entryId],
+    await _write(
+      db,
+      () => db.delete(
+        'entries',
+        where: 'account_id = ? AND entry_id = ?',
+        whereArgs: [accountId, entryId],
+      ),
     );
   }
 
@@ -1335,7 +1450,7 @@ WHERE command_id IN ($placeholders)''',
     final unique = ids.toSet();
     if (unique.isEmpty) return;
     final db = await database;
-    await db.transaction((txn) async {
+    await _transaction(db, (txn) async {
       for (final id in unique) {
         final rows = await txn.query(
           'media',
@@ -1363,7 +1478,7 @@ WHERE command_id IN ($placeholders)''',
   }) async {
     _validateCloudAccount(accountId, snapshot);
     final db = await database;
-    await db.transaction((txn) async {
+    await _transaction(db, (txn) async {
       if (await _activeAccountIdIn(txn) != accountId) {
         throw const QuestException('账号已变化，请重新打开草稿。');
       }
@@ -1405,7 +1520,7 @@ WHERE command_id IN ($placeholders)''',
     questById(questId);
     validateMedia(attachments);
     final db = await database;
-    return db.transaction((txn) async {
+    return _transaction(db, (txn) async {
       if (await _activeAccountIdIn(txn) != accountId) {
         throw const QuestException('账号已变化，请重新打开草稿。');
       }
@@ -1513,7 +1628,7 @@ WHERE command_id IN ($placeholders)''',
       throw const QuestException('这份旧草稿缺少同步分支信息，暂时无法完成。');
     }
     final db = await database;
-    await db.transaction((txn) async {
+    await _transaction(db, (txn) async {
       if (await _activeAccountIdIn(txn) != accountId) {
         throw const QuestException('账号已变化，请重新打开草稿。');
       }
@@ -1579,11 +1694,14 @@ WHERE command_id IN ($placeholders)''',
 
   Future<void> authorizeMeteredSnapshot(String accountId) async {
     final db = await database;
-    await db.update(
-      'outbox',
-      {'metered_allowed': 1},
-      where: 'account_id = ?',
-      whereArgs: [accountId],
+    await _write(
+      db,
+      () => db.update(
+        'outbox',
+        {'metered_allowed': 1},
+        where: 'account_id = ?',
+        whereArgs: [accountId],
+      ),
     );
   }
 
@@ -1597,25 +1715,28 @@ WHERE command_id IN ($placeholders)''',
     );
     if (rows.isEmpty) return;
     final media = _mediaFromRow(rows.single);
-    await db.update(
-      'media',
-      {
-        'server_id': null,
-        'state': 'reserved',
-        'last_error': null,
-        'attachment_json': jsonEncode(
-          media.attachment
-              .copyWith(
-                id: media.clientId,
-                byteSize: media.sourceBytes,
-                status: 'reserved',
-                localPath: media.localPath,
-              )
-              .toJson(),
-        ),
-      },
-      where: 'client_id = ?',
-      whereArgs: [clientId],
+    await _write(
+      db,
+      () => db.update(
+        'media',
+        {
+          'server_id': null,
+          'state': 'reserved',
+          'last_error': null,
+          'attachment_json': jsonEncode(
+            media.attachment
+                .copyWith(
+                  id: media.clientId,
+                  byteSize: media.sourceBytes,
+                  status: 'reserved',
+                  localPath: media.localPath,
+                )
+                .toJson(),
+          ),
+        },
+        where: 'client_id = ?',
+        whereArgs: [clientId],
+      ),
     );
   }
 
@@ -1824,7 +1945,8 @@ WHERE command_id IN ($placeholders)''',
     String entryId,
   ) async {
     final db = await database;
-    return db.transaction(
+    return _transaction(
+      db,
       (txn) async => (await _repairRowsIn(
         txn,
         accountId,
@@ -1840,7 +1962,7 @@ WHERE command_id IN ($placeholders)''',
     String? leaseOwner,
   }) async {
     final db = await database;
-    return db.transaction((txn) async {
+    return _transaction(db, (txn) async {
       await _assertLeaseIn(txn, leaseOwner);
       if (await _activeAccountIdIn(txn) != accountId) {
         throw const QuestException('账号已变化，请重新打开记录。');
@@ -1935,7 +2057,7 @@ WHERE command_id IN ($placeholders)''',
     String entryId,
   ) async {
     final db = await database;
-    return db.transaction((txn) async {
+    return _transaction(db, (txn) async {
       final commands = await txn.query(
         'outbox',
         where: 'account_id = ? AND type = ?',
@@ -2024,7 +2146,7 @@ WHERE command_id IN ($placeholders)''',
       throw const QuestException('云端返回了不属于本次同步的记录。');
     }
     final db = await database;
-    return db.transaction((txn) async {
+    return _transaction(db, (txn) async {
       await _assertLeaseIn(txn, leaseOwner);
       final accountRows = await txn.query(
         'accounts',
@@ -2324,7 +2446,7 @@ WHERE command_id IN ($placeholders)''',
     Iterable<String> ids,
   ) async {
     final db = await database;
-    return db.transaction((txn) async {
+    return _transaction(db, (txn) async {
       final paths = <String>[], serverIds = <String>[];
       for (final id in ids.toSet()) {
         final rows = await txn.query(
@@ -2374,7 +2496,7 @@ WHERE command_id IN ($placeholders)''',
     Duration grace = const Duration(hours: 1),
   }) async {
     final db = await database;
-    await db.transaction((txn) async {
+    await _transaction(db, (txn) async {
       final rows = await txn.query(
         'media',
         where: 'state = ? AND created_at < ?',
@@ -2456,7 +2578,7 @@ WHERE command_id IN ($placeholders)''',
 
   Future<void> markPathCleaned(String path) async {
     final db = await database;
-    await db.transaction((txn) async {
+    await _transaction(db, (txn) async {
       final rows = await txn.query(
         'cleanup_queue',
         columns: const ['client_id'],
@@ -2478,7 +2600,7 @@ WHERE command_id IN ($placeholders)''',
 
   Future<String> requestId(String accountId, String key) async {
     final db = await database;
-    return db.transaction((txn) async {
+    return _transaction(db, (txn) async {
       final existing = await txn.query(
         'request_ids',
         columns: const ['request_id'],
@@ -2501,10 +2623,13 @@ WHERE command_id IN ($placeholders)''',
 
   Future<void> clearRequestId(String accountId, String key) async {
     final db = await database;
-    await db.delete(
-      'request_ids',
-      where: 'account_id = ? AND request_key = ?',
-      whereArgs: [accountId, key],
+    await _write(
+      db,
+      () => db.delete(
+        'request_ids',
+        where: 'account_id = ? AND request_key = ?',
+        whereArgs: [accountId, key],
+      ),
     );
   }
 
@@ -2548,7 +2673,7 @@ WHERE command_id IN ($placeholders)''',
     Duration ttl = const Duration(minutes: 5),
   }) async {
     final db = await database;
-    return db.transaction((txn) async {
+    return _transaction(db, (txn) async {
       final now = _now().toUtc().millisecondsSinceEpoch;
       final rows = await txn.query(
         'task_leases',
@@ -2586,14 +2711,17 @@ WHERE command_id IN ($placeholders)''',
     Duration ttl = const Duration(minutes: 5),
   }) async {
     final db = await database;
-    final changed = await db.update(
-      'task_leases',
-      {
-        'expires_at':
-            _now().toUtc().millisecondsSinceEpoch + ttl.inMilliseconds,
-      },
-      where: 'lease_name = ? AND owner = ? AND expires_at > ?',
-      whereArgs: [leaseName, owner, _now().toUtc().millisecondsSinceEpoch],
+    final changed = await _write(
+      db,
+      () => db.update(
+        'task_leases',
+        {
+          'expires_at':
+              _now().toUtc().millisecondsSinceEpoch + ttl.inMilliseconds,
+        },
+        where: 'lease_name = ? AND owner = ? AND expires_at > ?',
+        whereArgs: [leaseName, owner, _now().toUtc().millisecondsSinceEpoch],
+      ),
     );
     return changed == 1;
   }
@@ -2624,16 +2752,19 @@ WHERE command_id IN ($placeholders)''',
 
   Future<void> releaseLease(String owner) async {
     final db = await database;
-    await db.delete(
-      'task_leases',
-      where: 'lease_name = ? AND owner = ?',
-      whereArgs: [leaseName, owner],
+    await _write(
+      db,
+      () => db.delete(
+        'task_leases',
+        where: 'lease_name = ? AND owner = ?',
+        whereArgs: [leaseName, owner],
+      ),
     );
   }
 
   Future<List<String>> purgeAccount(String accountId) async {
     final db = await database;
-    return db.transaction((txn) async {
+    return _transaction(db, (txn) async {
       final rows = await txn.query(
         'media',
         where: 'account_id = ? AND local_path IS NOT NULL',

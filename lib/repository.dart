@@ -383,9 +383,11 @@ class RemoteQuestRepository implements QuestRepository {
       StreamController<SyncSummary>.broadcast();
   final String _syncLeaseOwner = _uuid.v4();
   final String _sessionLeaseOwner = _uuid.v4();
+  final Set<Future<void>> _backgroundTasks = {};
   Future<void> _tail = Future.value();
   Future<void>? _syncFuture;
   Future<void>? _protocolFuture;
+  Future<void>? _disposeFuture;
   String? _lastEmittedSyncSignature;
   DateTime? _lastLoadAutoSyncAt;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
@@ -400,6 +402,21 @@ class RemoteQuestRepository implements QuestRepository {
   String get cacheScope => _base;
   @override
   Stream<SyncSummary> get syncUpdates => _syncController.stream;
+
+  void _launchBackground(Future<void> Function() action) {
+    if (_disposed) return;
+    late final Future<void> task;
+    task = Future<void>.sync(action)
+        .then<void>((_) {}, onError: (Object _, StackTrace _) {})
+        .whenComplete(() => _backgroundTasks.remove(task));
+    _backgroundTasks.add(task);
+  }
+
+  Future<void> _drainBackgroundTasks() async {
+    while (_backgroundTasks.isNotEmpty) {
+      await Future.wait(_backgroundTasks.toList(growable: false));
+    }
+  }
 
   Future<T> _serial<T>(Future<T> Function() action) {
     if (_disposed) {
@@ -457,7 +474,7 @@ class RemoteQuestRepository implements QuestRepository {
       ) {
         if (results.contains(ConnectivityResult.wifi) ||
             results.contains(ConnectivityResult.ethernet)) {
-          unawaited(_bestEffortSync());
+          _launchBackground(_bestEffortSync);
         }
       });
     } on MissingPluginException {
@@ -686,11 +703,13 @@ class RemoteQuestRepository implements QuestRepository {
   });
 
   Future<void> _emitSummary([String? message]) async {
-    if (_syncController.isClosed) return;
+    if (_disposed || _syncController.isClosed) return;
     final account = await _offline.activeAccount();
+    if (_disposed || _syncController.isClosed) return;
     final summary = account == null
         ? SyncSummary(message: message)
         : await _offline.summary(account.id);
+    if (_disposed || _syncController.isClosed) return;
     final emitted = SyncSummary(
       pending: summary.pending,
       uploading: summary.uploading,
@@ -710,6 +729,7 @@ class RemoteQuestRepository implements QuestRepository {
       'message': emitted.message,
     });
     if (_lastEmittedSyncSignature == signature) return;
+    if (_disposed || _syncController.isClosed) return;
     _lastEmittedSyncSignature = signature;
     _syncController.add(emitted);
   }
@@ -723,7 +743,7 @@ class RemoteQuestRepository implements QuestRepository {
     }
     _lastLoadAutoSyncAt = now;
     if (!await _wifiCheck()) return;
-    unawaited(_bestEffortSync());
+    if (!_disposed) await _bestEffortSync();
   }
 
   Future<AppSnapshot> _rollDay(OfflineAccount account) async {
@@ -737,9 +757,14 @@ class RemoteQuestRepository implements QuestRepository {
   }
 
   Future<void> _afterLocalMutation() async {
+    if (_disposed) return;
     await _emitSummary();
-    unawaited(scheduleSyncWork());
-    if (_autoSync && await _wifiCheck()) unawaited(_bestEffortSync());
+    if (_disposed) return;
+    await scheduleSyncWork();
+    if (_disposed) return;
+    if (_autoSync && await _wifiCheck() && !_disposed) {
+      await _bestEffortSync();
+    }
   }
 
   Future<void> _bestEffortSync() async {
@@ -758,7 +783,7 @@ class RemoteQuestRepository implements QuestRepository {
     var account = await _offline.activeAccount();
     if (account != null) {
       final state = await _rollDay(account);
-      unawaited(_autoSyncAfterLoad(account));
+      _launchBackground(() => _autoSyncAfterLoad(account!));
       return state;
     }
     if (await _tokens.read() != null) {
@@ -766,7 +791,7 @@ class RemoteQuestRepository implements QuestRepository {
         final cloud = _stateFrom(await _request('state'));
         if (cloud.profile != null) {
           account = await _offline.activateFromCloud(cloud);
-          unawaited(_autoSyncAfterLoad(account));
+          _launchBackground(() => _autoSyncAfterLoad(account!));
           return account.snapshot;
         }
       } on _ApiException catch (error) {
@@ -843,7 +868,9 @@ class RemoteQuestRepository implements QuestRepository {
         await _prefs!.remove('sidequest.remote.pending.$cacheScope');
       }
       await _emitSummary();
-      if (_autoSync && await _wifiCheck()) unawaited(_bestEffortSync());
+      if (_autoSync && await _wifiCheck()) {
+        _launchBackground(_bestEffortSync);
+      }
       return account.snapshot;
     } catch (_) {
       await _tokens.clear();
@@ -909,7 +936,7 @@ class RemoteQuestRepository implements QuestRepository {
       payload: {'questId': state.recommendedQuestId},
       expectedBranchId: account.activeBranchId,
     );
-    unawaited(_afterLocalMutation());
+    _launchBackground(_afterLocalMutation);
     return next;
   });
 
@@ -951,7 +978,7 @@ class RemoteQuestRepository implements QuestRepository {
       payload: const {},
       expectedBranchId: account.activeBranchId,
     );
-    unawaited(_afterLocalMutation());
+    _launchBackground(_afterLocalMutation);
     return next;
   });
 
@@ -1056,7 +1083,7 @@ class RemoteQuestRepository implements QuestRepository {
         attachments: media,
       );
     }
-    unawaited(_afterLocalMutation());
+    _launchBackground(_afterLocalMutation);
     return next;
   });
 
@@ -1135,7 +1162,7 @@ class RemoteQuestRepository implements QuestRepository {
         attachments: media,
       );
     }
-    unawaited(_afterLocalMutation());
+    _launchBackground(_afterLocalMutation);
     return next;
   });
 
@@ -1167,7 +1194,7 @@ class RemoteQuestRepository implements QuestRepository {
       payload: const {},
       expectedBranchId: account.activeBranchId,
     );
-    unawaited(_afterLocalMutation());
+    _launchBackground(_afterLocalMutation);
     return next;
   });
 
@@ -1384,8 +1411,8 @@ class RemoteQuestRepository implements QuestRepository {
     await _cleanupQueue();
     final token = await _tokens.read();
     if (token != null && result.serverIds.isNotEmpty) {
-      unawaited(
-        _cancelUnboundUploads(
+      _launchBackground(
+        () => _cancelUnboundUploads(
           accountId: account.id,
           token: token,
           serverIds: result.serverIds,
@@ -2098,11 +2125,13 @@ class RemoteQuestRepository implements QuestRepository {
   Future<void> syncNow({bool allowMetered = false}) async {
     if (_disposed) throw const QuestException('仓储已关闭，请重新打开应用。');
     await _ensureStarted();
+    if (_disposed) throw const QuestException('仓储已关闭，请重新打开应用。');
     if (allowMetered) {
       final account = await _offline.activeAccount();
       if (account != null) {
         await _offline.authorizeMeteredSnapshot(account.id);
       }
+      if (_disposed) throw const QuestException('仓储已关闭，请重新打开应用。');
     }
     final running = _syncFuture;
     if (running != null) return running;
@@ -2244,7 +2273,7 @@ class RemoteQuestRepository implements QuestRepository {
       entry: entry,
       mediaIds: media.map((item) => item.id).toList(),
     );
-    unawaited(_afterLocalMutation());
+    _launchBackground(_afterLocalMutation);
     return next;
   });
 
@@ -2273,8 +2302,9 @@ class RemoteQuestRepository implements QuestRepository {
   }
 
   @override
-  Future<void> dispose() async {
-    if (_disposed) return;
+  Future<void> dispose() => _disposeFuture ??= _dispose();
+
+  Future<void> _dispose() async {
     _disposed = true;
     await _connectivitySubscription?.cancel();
     if (_ownsClient) _client.close();
@@ -2284,6 +2314,7 @@ class RemoteQuestRepository implements QuestRepository {
       // Closing the HTTP client intentionally interrupts an in-flight sync.
     }
     await _tail;
+    await _drainBackgroundTasks();
     await _offline.releaseLease(_syncLeaseOwner);
     await _offline.releaseLease(_sessionLeaseOwner);
     await _offline.close();

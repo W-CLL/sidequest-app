@@ -626,8 +626,27 @@ void main() {
         return true;
       },
     );
-    final sync = background.repo.syncNow().catchError((Object _) {});
-    await entered.future.timeout(const Duration(seconds: 5));
+    final sync = background.repo
+        .syncNow()
+        .catchError((Object error, StackTrace stack) {
+          if (!entered.isCompleted) entered.completeError(error, stack);
+        })
+        .whenComplete(() {
+          if (!entered.isCompleted) {
+            entered.completeError(
+              StateError('Background sync exited before the network barrier.'),
+            );
+          }
+        });
+    await entered.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        if (!release.isCompleted) release.complete();
+        throw TimeoutException(
+          'Background sync did not reach the network barrier.',
+        );
+      },
+    );
     final switching = () async {
       try {
         await foreground.repo.logout();
