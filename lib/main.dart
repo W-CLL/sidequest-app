@@ -1,14 +1,14 @@
-import 'dart:convert';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'domain.dart';
 import 'repository.dart';
 import 'pages.dart';
 import 'widgets.dart';
+import 'media_widgets.dart';
+import 'sync_worker.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,6 +19,7 @@ void main() {
       ),
     ),
   );
+  unawaited(initializeBackgroundSync());
 }
 
 class SideQuestApp extends StatelessWidget {
@@ -79,7 +80,44 @@ class SideQuestApp extends StatelessWidget {
         indicatorColor: lime,
       ),
     ),
-    home: QuestHome(repository: repository),
+    home: repository.isConfigured
+        ? QuestHome(repository: repository)
+        : const ConfigurationPage(),
+  );
+}
+
+class ConfigurationPage extends StatelessWidget {
+  const ConfigurationPage({super.key});
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('支线')),
+    body: const SafeArea(
+      child: SingleChildScrollView(
+        padding: EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.settings_ethernet, size: 44, color: forest),
+            SizedBox(height: 16),
+            Text(
+              '尚未配置服务地址',
+              key: Key('service-not-configured'),
+              style: heading,
+            ),
+            SizedBox(height: 12),
+            Text(
+              '此版本使用联网账号。请安装已配置服务地址的测试包，或在构建时设置 API_BASE_URL。不会创建仅存在本机的临时账号。',
+              style: secondary,
+            ),
+            SizedBox(height: 16),
+            Text(
+              '服务地址需要 HTTPS；开发时仅允许本机回环 HTTP。不要把令牌或密码放入地址。',
+              style: secondary,
+            ),
+          ],
+        ),
+      ),
+    ),
   );
 }
 
@@ -97,6 +135,15 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
   int tab = 0, onboarding = -1;
   String role = '';
   List<String> selectedPreferences = [];
+  final _search = TextEditingController();
+  Timer? _searchDebounce;
+  Timer? _syncRefreshDebounce;
+  StreamSubscription<SyncSummary>? _syncSubscription;
+  SyncSummary? _syncSummary;
+  List<JournalEntry> _journalEntries = [];
+  String? _journalCursor, _journalError;
+  bool _journalLoading = false;
+  int _journalGeneration = 0;
   QuestRepository get repo => widget.repository;
   Quest get quest =>
       questById(state!.activeQuestId ?? state!.recommendedQuestId);
@@ -104,12 +151,24 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _syncSubscription = repo.syncUpdates.listen((summary) {
+      if (mounted) setState(() => _syncSummary = summary);
+      _syncRefreshDebounce?.cancel();
+      _syncRefreshDebounce = Timer(
+        const Duration(milliseconds: 250),
+        () => unawaited(_refreshAfterSync()),
+      );
+    });
     boot();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _searchDebounce?.cancel();
+    _syncRefreshDebounce?.cancel();
+    _search.dispose();
+    unawaited(_syncSubscription?.cancel());
     super.dispose();
   }
 
@@ -144,15 +203,129 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         selectedPreferences = List.of(savedPreferences);
         onboarding = role.isEmpty ? 0 : -1;
       });
+      if (snapshot.profile != null) unawaited(_loadJournal());
+      unawaited(_refreshSyncSummary());
     } catch (e) {
       if (mounted) setState(() => error = '$e');
     }
+  }
+
+  Future<void> _refreshSyncSummary() async {
+    try {
+      final summary = await repo.getSyncSummary();
+      if (mounted) setState(() => _syncSummary = summary);
+    } catch (_) {
+      /* A failed status check must not hide existing records. */
+    }
+  }
+
+  Future<void> _refreshAfterSync() async {
+    final accountId = state?.profile?.id;
+    if (accountId == null) return;
+    try {
+      final snapshot = await repo.load();
+      if (!mounted ||
+          state?.profile?.id != accountId ||
+          snapshot.profile?.id != accountId) {
+        return;
+      }
+      final fresh = {for (final entry in snapshot.entries) entry.id: entry};
+      setState(() {
+        _acceptSnapshot(snapshot);
+        _journalEntries = _journalEntries
+            .map((entry) => fresh[entry.id] ?? entry)
+            .toList();
+      });
+    } catch (_) {
+      /* Keep the readable cache while a status refresh is unavailable. */
+    }
+  }
+
+  Future<void> _loadJournal({bool append = false}) async {
+    if (state?.profile == null) return;
+    if (append && (_journalLoading || _journalCursor == null)) return;
+    final generation = append ? _journalGeneration : ++_journalGeneration;
+    final accountId = state!.profile!.id;
+    setState(() {
+      _journalLoading = true;
+      _journalError = null;
+    });
+    try {
+      final page = await repo.queryEntries(
+        query: _search.text.trim(),
+        cursor: append ? _journalCursor : null,
+      );
+      if (!mounted ||
+          generation != _journalGeneration ||
+          state?.profile?.id != accountId) {
+        return;
+      }
+      final merged = <String, JournalEntry>{
+        if (append)
+          for (final entry in _journalEntries) entry.id: entry,
+        for (final entry in page.entries) entry.id: entry,
+      };
+      setState(() {
+        _journalEntries = merged.values.toList();
+        _journalCursor = page.nextCursor;
+      });
+    } catch (error) {
+      if (mounted && generation == _journalGeneration) {
+        setState(() => _journalError = '$error');
+      }
+    } finally {
+      if (mounted && generation == _journalGeneration) {
+        setState(() => _journalLoading = false);
+      }
+    }
+  }
+
+  Future<void> _openSync() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => SyncStatusPage(
+          repository: repo,
+          onLogin: () async {
+            final result = await Navigator.of(context).push<AppSnapshot>(
+              MaterialPageRoute(
+                builder: (_) =>
+                    LoginPage(repository: repo, reauthenticate: true),
+              ),
+            );
+            if (mounted && result != null) {
+              setState(() => _acceptSnapshot(result));
+            }
+          },
+        ),
+      ),
+    );
+    if (!mounted) return;
+    await change(repo.load);
+    await _refreshSyncSummary();
+    await _loadJournal();
   }
 
   void toast(String message) {
     if (mounted) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  void _acceptSnapshot(AppSnapshot result) {
+    if (state?.profile?.id != result.profile?.id) {
+      _journalGeneration++;
+      _journalEntries = [];
+      _journalCursor = null;
+      _journalError = null;
+      _journalLoading = false;
+      _search.clear();
+      _syncSummary = null;
+    }
+    state = result;
+    if (result.profile != null) {
+      role = result.profile!.role;
+      selectedPreferences = List.of(result.profile!.preferences);
     }
   }
 
@@ -163,11 +336,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
       final result = await action();
       if (mounted) {
         setState(() {
-          state = result;
-          if (result.profile != null) {
-            role = result.profile!.role;
-            selectedPreferences = List.of(result.profile!.preferences);
-          }
+          _acceptSnapshot(result);
         });
       }
       return true;
@@ -200,10 +369,9 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
     );
     if (!mounted || result == null) return false;
     setState(() {
-      state = result;
-      role = result.profile!.role;
-      selectedPreferences = List.of(result.profile!.preferences);
+      _acceptSnapshot(result);
     });
+    unawaited(_loadJournal());
     return true;
   }
 
@@ -227,25 +395,44 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
     }
     if (state!.activeQuestId == null && !await change(repo.claim)) return;
     if (!mounted) return;
+    final previousIds = state!.entries.map((entry) => entry.id).toSet();
     final completed = await Navigator.of(context).push<AppSnapshot>(
       MaterialPageRoute(
         builder: (_) => RecordPage(
           repository: repo,
           quest: quest,
           initialDraft: state!.draft,
+          initialAttachments: state!.draftAttachments,
+          accountId: state!.profile?.id,
         ),
       ),
     );
     if (!mounted) return;
+    if (completed != null) setState(() => _acceptSnapshot(completed));
     await change(repo.load);
     if (completed != null && mounted) {
-      setState(() => state = completed);
+      final additions =
+          completed.entries
+              .where((entry) => !previousIds.contains(entry.id))
+              .toList()
+            ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      final completedEntry = additions.isEmpty ? null : additions.first;
+      final latest =
+          state!.entries
+              .where((entry) => entry.id == completedEntry?.id)
+              .firstOrNull ??
+          completedEntry;
+      final saved = latest?.isSynced == true;
+      unawaited(_loadJournal());
+      unawaited(_refreshSyncSummary());
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
           icon: const Icon(Icons.spa_outlined, color: forest, size: 48),
-          title: const Text('已保存到探索册'),
-          content: const Text('可以在探索册查看，也可以继续探索。'),
+          title: Text(saved ? '已保存到探索册' : '已存到本机，等待上传'),
+          content: Text(
+            saved ? '服务已确认保存，可在探索册查看。' : 'Wi-Fi 下自动上传。可在“上传与同步”中查看进度或立即上传。',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -322,7 +509,11 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: tab,
-        onDestinationSelected: (i) => setState(() => tab = i),
+        onDestinationSelected: (i) {
+          setState(() => tab = i);
+          if (i == 1) unawaited(_loadJournal());
+          if (i == 2) unawaited(_refreshSyncSummary());
+        },
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.explore_outlined),
@@ -795,7 +986,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  '探索册已有 ${state!.entries.length} 条记录',
+                  '探索册已有 ${state!.entryCount} 条记录',
                   style: const TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
@@ -807,7 +998,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 8),
         Text(
-          repo.isRemote ? '联网测试版 · 记录仅本人可访问' : '本机体验版 · 账号与记录仅在这台设备，尚未云同步',
+          '记录先存本机 · Wi-Fi 下自动上传 · 默认私密',
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 11, color: muted),
         ),
@@ -823,6 +1014,35 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
       const SizedBox(height: 5),
       const Text('把普通日子，收成自己的小收藏。', style: secondary),
       const SizedBox(height: 14),
+      TextField(
+        key: const Key('journal-search-field'),
+        controller: _search,
+        decoration: InputDecoration(
+          hintText: '搜索标题或正文',
+          prefixIcon: const Icon(Icons.search),
+          suffixIcon: _search.text.isEmpty
+              ? null
+              : IconButton(
+                  key: const Key('journal-clear-search'),
+                  tooltip: '清空搜索',
+                  onPressed: () {
+                    _search.clear();
+                    unawaited(_loadJournal());
+                  },
+                  icon: const Icon(Icons.close),
+                ),
+        ),
+        onChanged: (_) {
+          _searchDebounce?.cancel();
+          _journalGeneration++;
+          setState(() {});
+          _searchDebounce = Timer(
+            const Duration(milliseconds: 350),
+            () => unawaited(_loadJournal()),
+          );
+        },
+      ),
+      const SizedBox(height: 12),
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
         decoration: BoxDecoration(
@@ -836,7 +1056,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '${state!.entries.length.toString().padLeft(2, '0')}  条小发现',
+                    '${state!.entryCount.toString().padLeft(2, '0')}  条小发现',
                     style: const TextStyle(
                       fontSize: 22,
                       color: Colors.white,
@@ -858,7 +1078,17 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
       const SizedBox(height: 12),
       const IconLabel(Icons.lock_outline, '默认私密，不会自动公开'),
       const SizedBox(height: 12),
-      if (state!.entries.isEmpty) ...[
+      if (_journalError != null) ErrorNotice(_journalError!),
+      if (_journalEntries.isEmpty &&
+          !_journalLoading &&
+          _search.text.isNotEmpty)
+        const Padding(
+          padding: EdgeInsets.all(16),
+          child: Text('没有找到匹配的记录', key: Key('journal-no-results')),
+        ),
+      if (_journalEntries.isEmpty &&
+          _search.text.isEmpty &&
+          !_journalLoading) ...[
         const SizedBox(height: 12),
         const Icon(Icons.menu_book_outlined, size: 44, color: muted),
         const SizedBox(height: 12),
@@ -874,13 +1104,14 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
           child: const Text('看看今天的活动'),
         ),
       ],
-      ...state!.entries.reversed.map(
+      ..._journalEntries.map(
         (entry) => Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Material(
             color: Colors.white,
             borderRadius: BorderRadius.circular(17),
             child: InkWell(
+              key: ValueKey('journal-entry-${entry.id}'),
               borderRadius: BorderRadius.circular(17),
               onTap: () => entryDetail(entry),
               child: Padding(
@@ -913,7 +1144,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      formatDate(entry.createdAt),
+                      '${formatDate(entry.createdAt)} · ${syncStatusLabel(entry.syncStatus)}${entry.attachments.isEmpty ? '' : ' · ${entry.attachments.length} 个附件'}',
                       style: const TextStyle(fontSize: 12, color: muted),
                     ),
                   ],
@@ -923,6 +1154,14 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
           ),
         ),
       ),
+      if (_journalLoading)
+        const Padding(padding: EdgeInsets.all(12), child: Text('正在读取记录…')),
+      if (_journalCursor != null)
+        OutlinedButton(
+          key: const Key('journal-load-more'),
+          onPressed: _journalLoading ? null : () => _loadJournal(append: true),
+          child: const Text('加载更多'),
+        ),
     ],
   );
   Future<void> entryDetail(JournalEntry entry) async {
@@ -931,7 +1170,10 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         builder: (_) => EntryPage(entry: entry, repository: repo),
       ),
     );
-    if (deleted == true) await change(repo.load);
+    if (deleted == true) {
+      await change(repo.load);
+      if (mounted) await _loadJournal();
+    }
   }
 
   Widget profile() {
@@ -945,7 +1187,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
       menu(
         Icons.info_outline,
         '版本说明',
-        '0.1.1 · 文字测试版',
+        '0.2.0 · 多媒体记录',
         () => Navigator.push(
           context,
           MaterialPageRoute<void>(
@@ -967,19 +1209,21 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
     ];
     final account = <Widget>[
       menu(
-        Icons.file_download_outlined,
-        '导出我的记录',
-        '导出 JSON，不包含密码或登录凭据',
-        exportRecords,
+        Icons.cloud_upload_outlined,
+        '上传与同步',
+        _syncSummary == null
+            ? 'Wi-Fi 下自动上传'
+            : '待上传 ${_syncSummary!.pending} · 失败 ${_syncSummary!.failed}',
+        _openSync,
       ),
-      menu(Icons.logout, '退出登录', '设备上的账号与记录仍然保留', () async {
+      menu(Icons.logout, '退出登录', '待上传内容留在本机，登录原账号后继续', () async {
         if (await confirm(
           context,
           '退出登录？',
-          '再次登录需要昵称和密码。当前活动与文字草稿不会删除。',
+          '再次登录需要昵称和密码。待上传内容和草稿保留在本机，其他账号无法查看或上传。',
           '退出登录',
         )) {
-          await change(repo.logout);
+          await change(() => repo.logout());
         }
       }),
       menu(
@@ -1016,7 +1260,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
                     ),
                   ),
                   const SizedBox(height: 2),
-                  Text(repo.isRemote ? '联网账号' : '仅本机测试账号', style: secondary),
+                  const Text('私人账号', style: secondary),
                 ],
               ),
             ),
@@ -1038,7 +1282,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         ],
         const SizedBox(height: 10),
         Text(
-          repo.isRemote ? '联网文字体验版 · 请勿存放敏感内容' : '本机文字体验版 · 数据仅在当前安装中',
+          '测试版 · 未上传内容请保留本机数据',
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 11, color: muted),
         ),
@@ -1095,33 +1339,6 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
       onTap: busy ? null : onTap,
     ),
   );
-  Future<void> exportRecords() async {
-    if (!await confirm(
-      context,
-      '导出私密记录？',
-      '文件包含全部文字记录。请只保存到你信任的位置，不包含密码与令牌。',
-      '导出',
-    )) {
-      return;
-    }
-    try {
-      final data = await repo.exportData();
-      final file = XFile.fromData(
-        Uint8List.fromList(utf8.encode(data)),
-        mimeType: 'application/json',
-        name: 'sidequest-journal.json',
-      );
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [file],
-          fileNameOverrides: ['sidequest-journal.json'],
-          title: '我的支线记录',
-        ),
-      );
-    } catch (e) {
-      toast('导出未完成：$e');
-    }
-  }
 
   Future<void> deleteAccount() async {
     final controller = TextEditingController();
@@ -1132,7 +1349,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('操作不可恢复。输入密码确认，建议先导出记录。'),
+            const Text('操作不可恢复，将删除账号、记录和媒体。输入密码确认。'),
             const SizedBox(height: 16),
             TextField(
               controller: controller,
@@ -1156,7 +1373,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
     await Future<void>.delayed(const Duration(milliseconds: 300));
     controller.dispose();
     if (password != null && await change(() => repo.deleteAccount(password))) {
-      toast('账号与应用内记录已删除。导出和分享的副本需要自行删除。');
+      toast('账号与应用内记录已删除。分享出去的副本需要自行删除。');
     }
   }
 }

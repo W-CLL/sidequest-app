@@ -11,8 +11,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sidequest/domain.dart';
 import 'package:sidequest/main.dart';
+import 'package:sidequest/media_widgets.dart';
 import 'package:sidequest/pages.dart';
-import 'package:sidequest/repository.dart';
+
+import 'ui_test_harness.dart';
 
 void main() {
   const capture = bool.fromEnvironment('CAPTURE_PREVIEWS');
@@ -53,6 +55,40 @@ void main() {
 
     Future<void> shot(String name) async {
       await tester.pumpAndSettle();
+      // File I/O, image codec creation, and the first decoded frame each cross
+      // separate async boundaries. pumpAndSettle alone cannot finish real I/O.
+      final privateImages = find.byType(PrivateMediaImage);
+      bool imagesDecoded() => privateImages.evaluate().every((element) {
+        final frames = find.descendant(
+          of: find.byWidget(element.widget),
+          matching: find.byType(RawImage),
+        );
+        return frames.evaluate().isNotEmpty &&
+            tester.widgetList<RawImage>(frames).every((w) => w.image != null);
+      });
+      for (var attempt = 0; attempt < 100 && !imagesDecoded(); attempt++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(
+        imagesDecoded(),
+        isTrue,
+        reason: '$name: decode every media image',
+      );
+      await tester.pumpAndSettle();
+      if (name == '19-share-photo-preview') {
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.byKey(const Key('share-confirm-action')),
+              )
+              .onPressed,
+          isNotNull,
+          reason: 'The exported photo preview must be fully loaded.',
+        );
+      }
       expect(tester.takeException(), isNull, reason: name);
       final boundary = tester.renderObject<RenderRepaintBoundary>(
         find.byKey(rootKey),
@@ -78,7 +114,7 @@ void main() {
     }
 
     late ThemeData previewTheme;
-    Future<LocalQuestRepository> mount({
+    Future<InMemoryQuestRepository> mount({
       bool onboarded = true,
       bool registered = false,
       bool active = false,
@@ -89,10 +125,7 @@ void main() {
       SharedPreferences.setMockInitialValues(
         onboarded ? {'ui_role': 'employee'} : {},
       );
-      final repo = LocalQuestRepository(
-        preferences: await SharedPreferences.getInstance(),
-        passwordIterations: 100,
-      );
+      final repo = InMemoryQuestRepository();
       if (registered) {
         await repo.savePreferences('employee', ['观察细节']);
         await repo.register('小叶子', 'preview-test-password');
@@ -192,6 +225,126 @@ void main() {
     );
     await tester.pumpAndSettle();
     await shot('12-entry');
+
+    final fixtureDirectory = Directory('artifacts/v0.2.0/ui-fixtures');
+    final fixtureFile = File('${fixtureDirectory.path}/leaf.png');
+    await tester.runAsync(() async {
+      await fixtureDirectory.create(recursive: true);
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      canvas.drawRect(
+        const Rect.fromLTWH(0, 0, 400, 260),
+        Paint()..color = const Color(0xFFEDF1E6),
+      );
+      canvas.drawCircle(
+        const Offset(320, 55),
+        30,
+        Paint()..color = const Color(0xFFDFECAC),
+      );
+      final stem = Paint()
+        ..color = const Color(0xFF234D3C)
+        ..strokeWidth = 7;
+      canvas.drawLine(const Offset(200, 220), const Offset(210, 65), stem);
+      canvas.drawOval(
+        const Rect.fromLTWH(145, 75, 72, 45),
+        Paint()..color = const Color(0xFF78976B),
+      );
+      canvas.drawOval(
+        const Rect.fromLTWH(207, 120, 72, 45),
+        Paint()..color = const Color(0xFF4D7458),
+      );
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(400, 260);
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      await fixtureFile.writeAsBytes(data!.buffer.asUint8List());
+      image.dispose();
+      picture.dispose();
+    });
+    final media = <MediaAttachment>[
+      MediaAttachment(
+        id: 'preview-image',
+        kind: MediaKind.image,
+        localPath: fixtureFile.absolute.path,
+      ),
+      const MediaAttachment(
+        id: 'preview-video',
+        kind: MediaKind.video,
+        durationMs: 12000,
+      ),
+      const MediaAttachment(
+        id: 'preview-audio',
+        kind: MediaKind.audio,
+        durationMs: 32000,
+      ),
+    ];
+    Future<void> mountPage(Widget page) async {
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: rootKey,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: previewTheme,
+            home: page,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    final mixedRepo = InMemoryQuestRepository(snapshotFixture(active: true));
+    mixedRepo.snapshot = mixedRepo.snapshot.copyWith(
+      draft: '窗边的绿叶、短视频和一句语音，都留在这次记录里。',
+      draftAttachments: media,
+    );
+    await mountPage(
+      RecordPage(
+        repository: mixedRepo,
+        quest: questById('green'),
+        initialDraft: '窗边的绿叶、短视频和一句语音，都留在这次记录里。',
+        initialAttachments: media,
+        accountId: mixedRepo.snapshot.profile!.id,
+      ),
+    );
+    await shot('15-record-mixed-media');
+    final mixedEntry = snapshot.entries.single.copyWith(
+      attachments: media,
+      syncStatus: 'failed',
+      syncError: '视频处理失败，可重试或仅上传文字。',
+    );
+    mixedRepo.snapshot = mixedRepo.snapshot.copyWith(
+      entries: [mixedEntry],
+      entryCount: 1,
+      conflictDrafts: [
+        ConflictDraft(
+          id: 'preview-conflict',
+          questId: 'light',
+          text: '另一台设备留下的草稿',
+          createdAt: DateTime(2026, 10, 10),
+        ),
+      ],
+    );
+    await mountPage(SyncStatusPage(repository: mixedRepo));
+    await shot('16-sync-status');
+    await mountPage(
+      ShareSelectionPage(entry: mixedEntry, repository: mixedRepo),
+    );
+    await shot('17-share-selection-default');
+    await mountPage(
+      SharePreviewPage(
+        entry: mixedEntry,
+        repository: mixedRepo,
+        images: const [],
+      ),
+    );
+    await shot('18-share-text-preview');
+    await mountPage(
+      SharePreviewPage(
+        entry: mixedEntry,
+        repository: mixedRepo,
+        images: [media.first],
+      ),
+    );
+    await shot('19-share-photo-preview');
 
     // Every catalog entry is also visually rendered through the detail layout.
     for (final quest in questCatalog) {

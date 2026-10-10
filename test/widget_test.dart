@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sidequest/pages.dart';
-import 'package:sidequest/repository.dart';
 
 import 'ui_test_harness.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  Future<LocalQuestRepository> start(
+  Future<InMemoryQuestRepository> start(
     WidgetTester tester, {
     bool onboarded = false,
     double width = 390,
@@ -71,7 +70,7 @@ void main() {
         tester,
         find.byKey(const Key('record-complete-action')),
       );
-      expect(find.text('已保存到探索册'), findsOneWidget);
+      expect(find.text('已存到本机，等待上传'), findsOneWidget);
       final state = await repository.load();
       expect(state.profile!.nickname, '小叶子');
       expect(state.entries.single.text, '窗边的叶子是柔和的绿色。');

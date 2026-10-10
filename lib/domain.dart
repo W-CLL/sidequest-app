@@ -349,6 +349,18 @@ class ConflictDraft {
   );
 }
 
+/// A record editor remains attached to the branch it opened, even if sync
+/// adopts another device's canonical progress while this screen is visible.
+class DraftEditorContext {
+  const DraftEditorContext({
+    required this.snapshot,
+    required this.branchId,
+    required this.questId,
+  });
+  final AppSnapshot snapshot;
+  final String branchId, questId;
+}
+
 class EntryPageResult {
   const EntryPageResult({
     required this.entries,
@@ -365,13 +377,19 @@ class SyncSummary {
     this.pending = 0,
     this.uploading = 0,
     this.failed = 0,
+    this.queuedCommands = 0,
     this.message,
     this.requiresLogin = false,
   });
   final int pending, uploading, failed;
+
+  /// Internal progress/draft work also needs syncing, but is not another record
+  /// in the user-facing pending/uploading/failed counts.
+  final int queuedCommands;
   final String? message;
   final bool requiresLogin;
-  bool get hasPending => pending > 0 || uploading > 0 || failed > 0;
+  bool get hasPending =>
+      pending > 0 || uploading > 0 || failed > 0 || queuedCommands > 0;
 }
 
 class AppSnapshot {

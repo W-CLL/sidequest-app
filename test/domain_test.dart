@@ -190,4 +190,14 @@ void main() {
     expect(restored.branchId, 'old-branch');
     expect(restored.baseRevision, 3);
   });
+  test(
+    'progress-only queue still requires sync without inflating record counts',
+    () {
+      const summary = SyncSummary(queuedCommands: 3);
+      expect(summary.pending, 0);
+      expect(summary.uploading, 0);
+      expect(summary.failed, 0);
+      expect(summary.hasPending, isTrue);
+    },
+  );
 }

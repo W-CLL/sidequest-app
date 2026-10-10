@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sidequest/domain.dart';
 import 'package:sidequest/pages.dart';
-import 'package:sidequest/repository.dart';
 
 import 'ui_test_harness.dart';
 
@@ -41,7 +40,7 @@ Future<void> _pumpSnapshot(WidgetTester tester, AppSnapshot snapshot) async {
   await pumpSideQuest(tester, SnapshotQuestRepository(snapshot));
 }
 
-Future<LocalQuestRepository> _pumpLocal(
+Future<InMemoryQuestRepository> _pumpLocal(
   WidgetTester tester, {
   LocalFixture fixture = LocalFixture.guest,
   bool onboarded = true,
@@ -195,7 +194,7 @@ void main() {
       await _openProfile(tester);
       expectNoExtraScroll(const Key('profile-scroll'), tester);
       expect(find.byKey(const Key('profile-login-action')), findsNothing);
-      expect(find.text('导出我的记录'), findsOneWidget);
+      expect(find.text('上传与同步'), findsOneWidget);
       expect(find.text('退出登录'), findsOneWidget);
       expect(find.text('删除账号与全部记录'), findsOneWidget);
       expectNoLayoutException(tester);
@@ -248,11 +247,11 @@ void main() {
     });
   });
 
-  testWidgets('all 16 quest details keep the primary action fixed', (
+  testWidgets('all 40 quest details keep the primary action fixed', (
     tester,
   ) async {
     configureTestView(tester);
-    expect(questCatalog, hasLength(16));
+    expect(questCatalog, hasLength(40));
     for (final quest in questCatalog) {
       await _pumpSnapshot(
         tester,
@@ -554,28 +553,28 @@ void main() {
         keyboardInset: 300,
         scrollableKey: const Key('record-scroll'),
       );
-      final maximumText = List<String>.filled(300, '字').join();
+      final maximumText = List<String>.filled(500, '字').join();
       await tester.enterText(field, maximumText);
       await tester.pumpAndSettle();
       expect(
         tester.widget<TextField>(field).controller!.text.runes,
-        hasLength(300),
+        hasLength(500),
       );
-      expect(find.text('300 / 300'), findsOneWidget);
+      expect(find.text('500 / 500'), findsOneWidget);
 
       // An over-limit edit is rejected by the Unicode code-point formatter,
-      // retaining the valid 300-code-point draft and counter.
+      // retaining the valid 500-code-point draft and counter.
       await tester.enterText(field, '$maximumText超');
       await tester.pumpAndSettle();
       expect(tester.widget<TextField>(field).controller!.text, maximumText);
-      expect(find.text('300 / 300'), findsOneWidget);
+      expect(find.text('500 / 500'), findsOneWidget);
       for (final action in [save, complete]) {
         expectOnScreenAndHitTestable(tester, action, keyboardInset: 300);
       }
       await tester.tap(save);
       await tester.pumpAndSettle();
       expect((await repository.load()).draft, maximumText);
-      expect(find.text('草稿已保存，可以晚一点继续。'), findsOneWidget);
+      expect(find.text('草稿已存本机。'), findsOneWidget);
       for (final action in [save, complete]) {
         expectOnScreenAndHitTestable(tester, action, keyboardInset: 300);
       }

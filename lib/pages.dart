@@ -1,12 +1,9 @@
-import 'dart:ui' as ui;
-
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
-import 'package:share_plus/share_plus.dart';
 
 import 'domain.dart';
 import 'repository.dart';
+
+export 'record_pages.dart';
 
 const _paper = Color(0xFFF7F6F0);
 const _ink = Color(0xFF203B31);
@@ -14,18 +11,18 @@ const _forest = Color(0xFF234D3C);
 const _lime = Color(0xFFDFECAC);
 const _pale = Color(0xFFEEF1E6);
 const _muted = Color(0xFF69756C);
-const _line = Color(0xFFE2E6DB);
 
 String _errorText(Object error) =>
     error is QuestException ? error.message : '这次没有保存成功，请稍后重试。内容仍保留在当前页面。';
-String _date(DateTime value) {
-  final date = value.toLocal();
-  return '${date.year}.${date.month.toString().padLeft(2, '0')}.${date.day.toString().padLeft(2, '0')}';
-}
 
 class LoginPage extends StatefulWidget {
-  const LoginPage({super.key, required this.repository});
+  const LoginPage({
+    super.key,
+    required this.repository,
+    this.reauthenticate = false,
+  });
   final QuestRepository repository;
+  final bool reauthenticate;
   @override
   State<LoginPage> createState() => _LoginPageState();
 }
@@ -38,6 +35,22 @@ class _LoginPageState extends State<LoginPage> {
   bool _obscure = true;
   bool _busy = false;
   String? _error;
+  @override
+  void initState() {
+    super.initState();
+    _register = !widget.reauthenticate;
+    if (widget.reauthenticate) {
+      widget.repository
+          .load()
+          .then((state) {
+            if (mounted && _nickname.text.isEmpty) {
+              _nickname.text = state.profile?.nickname ?? '';
+            }
+          })
+          .catchError((Object _) {});
+    }
+  }
+
   @override
   void dispose() {
     _nickname.dispose();
@@ -145,9 +158,7 @@ class _LoginPageState extends State<LoginPage> {
             decoration: InputDecoration(
               labelText: '昵称',
               hintText: '2–20 个字',
-              helperText: widget.repository.isRemote
-                  ? '不能与当前服务中的已有账号重复'
-                  : '仅检查当前安装中的昵称',
+              helperText: '不能与当前服务中的已有账号重复',
               helperMaxLines: 2,
               prefixIcon: const Icon(Icons.person_outline_rounded),
             ),
@@ -205,10 +216,8 @@ class _LoginPageState extends State<LoginPage> {
           ],
           _Panel(
             icon: Icons.info_outline_rounded,
-            title: widget.repository.isRemote ? '联网测试账号' : '仅保存在当前安装',
-            text: widget.repository.isRemote
-                ? '账号与记录会发送到已配置的服务。请使用独立测试密码。'
-                : '卸载或清除应用数据会丢失账号与记录。请使用独立测试密码。',
+            title: '联网账号 · 本机暂存',
+            text: '账号需联网创建。待上传内容先存本机，Wi-Fi 下自动上传到私人账号。',
           ),
           SizedBox(
             width: double.infinity,
@@ -369,443 +378,6 @@ class QuestDetail extends StatelessWidget {
   );
 }
 
-class RecordPage extends StatefulWidget {
-  const RecordPage({
-    super.key,
-    required this.repository,
-    required this.quest,
-    required this.initialDraft,
-  });
-  final QuestRepository repository;
-  final Quest quest;
-  final String initialDraft;
-  @override
-  State<RecordPage> createState() => _RecordPageState();
-}
-
-class _RecordPageState extends State<RecordPage> {
-  late final TextEditingController _text;
-  late String _savedText;
-  bool _busy = false;
-  bool _allowPop = false;
-  String? _error;
-  @override
-  void initState() {
-    super.initState();
-    _text = TextEditingController(text: widget.initialDraft);
-    _savedText = widget.initialDraft;
-    _text.addListener(_textChanged);
-  }
-
-  void _textChanged() {
-    if (mounted) setState(() {});
-  }
-
-  @override
-  void dispose() {
-    _text.removeListener(_textChanged);
-    _text.dispose();
-    super.dispose();
-  }
-
-  Future<bool> _save({bool notify = false}) async {
-    if (_busy) return false;
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      await widget.repository.saveDraft(_text.text);
-      _savedText = _text.text;
-      if (notify && mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('草稿已保存，可以晚一点继续。')));
-      }
-      return true;
-    } catch (error) {
-      if (mounted) setState(() => _error = _errorText(error));
-      return false;
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _leave() async {
-    if (_busy || _allowPop) return;
-    if (_text.text != _savedText && !await _save()) return;
-    if (!mounted) return;
-    setState(() => _allowPop = true);
-    await WidgetsBinding.instance.endOfFrame;
-    if (mounted) Navigator.of(context).pop();
-  }
-
-  Future<void> _complete() async {
-    if (_busy) return;
-    final value = _text.text.trim();
-    if (value.isEmpty || value.runes.length > 300) {
-      setState(() => _error = '先写一点内容吧，1 到 300 个字就够了。');
-      return;
-    }
-    FocusScope.of(context).unfocus();
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      final snapshot = await widget.repository.complete(value);
-      if (!mounted) return;
-      setState(() => _allowPop = true);
-      await WidgetsBinding.instance.endOfFrame;
-      if (mounted) Navigator.of(context).pop(snapshot);
-    } catch (error) {
-      if (mounted) setState(() => _error = _errorText(error));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => PopScope<AppSnapshot>(
-    canPop: _allowPop,
-    onPopInvokedWithResult: (didPop, result) {
-      if (!didPop) _leave();
-    },
-    child: Scaffold(
-      backgroundColor: _paper,
-      appBar: AppBar(
-        title: const Text('记录这次发现'),
-        leading: IconButton(
-          tooltip: '保存并返回',
-          onPressed: _busy ? null : _leave,
-          icon: const Icon(Icons.arrow_back_rounded),
-        ),
-      ),
-      body: SafeArea(
-        child: ListView(
-          key: const Key('record-scroll'),
-          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
-          children: [
-            _Tag(widget.quest.title),
-            const SizedBox(height: 16),
-            const Text(
-              '这一刻，你发现了什么？',
-              style: TextStyle(
-                fontSize: 25,
-                fontWeight: FontWeight.w700,
-                color: _ink,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              '一句话、几个词都可以。',
-              style: TextStyle(color: _muted, height: 1.6),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              key: const Key('record-text-field'),
-              controller: _text,
-              readOnly: _busy,
-              minLines: 5,
-              maxLines: 5,
-              inputFormatters: [const _CodePointLimit(300)],
-              textCapitalization: TextCapitalization.sentences,
-              scrollPadding: const EdgeInsets.only(bottom: 180),
-              decoration: const InputDecoration(
-                hintText: '比如：窗边叶子的绿，比杯子上的更柔和。',
-                alignLabelWithHint: true,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerRight,
-              child: Text(
-                '${_text.text.runes.length} / 300',
-                style: const TextStyle(fontSize: 12, color: _muted),
-              ),
-            ),
-            const SizedBox(height: 16),
-            _Panel(
-              icon: Icons.lock_outline_rounded,
-              title: '保存与隐私',
-              text: widget.repository.isRemote
-                  ? '文字会保存到已配置服务的私人账号，不会自动公开。'
-                  : '文字只保存在当前安装中，不会自动公开，也未额外加密。',
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              _ErrorLabel(_error!),
-            ],
-            const SizedBox(height: 12),
-            const Text(
-              '返回时会尝试保存草稿；强制关闭前请主动存草稿。',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: _muted, fontSize: 12, height: 1.6),
-            ),
-          ],
-        ),
-      ),
-      bottomNavigationBar: AnimatedPadding(
-        duration: const Duration(milliseconds: 150),
-        curve: Curves.easeOut,
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.viewInsetsOf(context).bottom,
-        ),
-        child: SafeArea(
-          minimum: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final stacked =
-                  constraints.maxWidth < 300 ||
-                  MediaQuery.textScalerOf(context).scale(1) > 1.4;
-              final save = OutlinedButton.icon(
-                key: const Key('record-save-draft-action'),
-                onPressed: _busy ? null : () => _save(notify: true),
-                icon: const Icon(Icons.bookmark_outline_rounded),
-                label: const Text('保存草稿'),
-              );
-              final complete = FilledButton.icon(
-                key: const Key('record-complete-action'),
-                onPressed: _busy ? null : _complete,
-                icon: _busy
-                    ? const _Spinner()
-                    : const Icon(Icons.check_rounded),
-                label: Text(_busy ? '正在保存…' : '完成并保存'),
-              );
-              if (stacked) {
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(width: double.infinity, child: save),
-                    const SizedBox(height: 8),
-                    SizedBox(width: double.infinity, child: complete),
-                  ],
-                );
-              }
-              return Row(
-                children: [
-                  Expanded(child: save),
-                  const SizedBox(width: 12),
-                  Expanded(child: complete),
-                ],
-              );
-            },
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-class EntryPage extends StatefulWidget {
-  const EntryPage({super.key, required this.entry, required this.repository});
-  final JournalEntry entry;
-  final QuestRepository repository;
-  @override
-  State<EntryPage> createState() => _EntryPageState();
-}
-
-class _EntryPageState extends State<EntryPage> {
-  final _cardKey = GlobalKey();
-  bool _busy = false;
-  String? _error;
-  Future<void> _share() async {
-    if (_busy) return;
-    final accepted = await _confirm(
-      context,
-      '分享前，再看一眼',
-      '卡片会包含探索主题、日期和这段记录，不含昵称或身份。请检查文字中是否包含住址、真实姓名或他人隐私。分享后，接收方可保存或转发。',
-      '生成并分享卡片',
-    );
-    if (!accepted || !mounted) return;
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    ui.Image? image;
-    try {
-      await WidgetsBinding.instance.endOfFrame;
-      if (!mounted || _cardKey.currentContext == null) return;
-      await Scrollable.ensureVisible(_cardKey.currentContext!, alignment: 0);
-      await WidgetsBinding.instance.endOfFrame;
-      if (!mounted) return;
-      final boundary =
-          _cardKey.currentContext!.findRenderObject()! as RenderRepaintBoundary;
-      image = await boundary.toImage(pixelRatio: 2);
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      if (byteData == null) throw const QuestException('卡片生成失败，请重试。');
-      if (!mounted) return;
-      final box = context.findRenderObject() as RenderBox?;
-      final origin = box == null
-          ? null
-          : box.localToGlobal(Offset.zero) & box.size;
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [
-            XFile.fromData(
-              byteData.buffer.asUint8List(),
-              mimeType: 'image/png',
-              name: 'sidequest-card.png',
-            ),
-          ],
-          fileNameOverrides: const ['sidequest-card.png'],
-          title: '一次小发现',
-          sharePositionOrigin: origin,
-        ),
-      );
-    } catch (error) {
-      if (mounted) {
-        setState(
-          () => _error = error is QuestException
-              ? error.message
-              : '暂时无法调起分享，请稍后重试。你的记录不会受到影响。',
-        );
-      }
-    } finally {
-      image?.dispose();
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _delete() async {
-    if (_busy) return;
-    final accepted = await _confirm(
-      context,
-      '删除这条记录？',
-      '删除后不能恢复。已经分享出去的卡片不会被一起删除，其他人的副本也无法撤回。',
-      '删除记录',
-    );
-    if (!accepted || !mounted) return;
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      await widget.repository.deleteEntry(widget.entry.id);
-      if (mounted) Navigator.of(context).pop(true);
-    } catch (error) {
-      if (mounted) setState(() => _error = _errorText(error));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: _paper,
-    appBar: AppBar(
-      title: const Text('探索记录'),
-      actions: [
-        IconButton(
-          tooltip: '删除记录',
-          onPressed: _busy ? null : _delete,
-          icon: const Icon(Icons.delete_outline_rounded),
-        ),
-      ],
-    ),
-    body: SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            RepaintBoundary(
-              key: _cardKey,
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: _pale,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: _line),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.spa_outlined, color: _forest, size: 24),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '生活里的小发现',
-                            style: TextStyle(
-                              color: _forest,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    Text(
-                      widget.entry.questTitle,
-                      style: const TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w700,
-                        color: _ink,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      _date(widget.entry.createdAt),
-                      style: const TextStyle(color: _muted, fontSize: 12),
-                    ),
-                    const SizedBox(height: 20),
-                    Text(
-                      widget.entry.text,
-                      style: const TextStyle(
-                        fontSize: 17,
-                        height: 1.9,
-                        color: _ink,
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    const Divider(color: _line),
-                    const SizedBox(height: 12),
-                    const Text(
-                      '不用远行，日常就有新的风景。',
-                      style: TextStyle(
-                        color: _muted,
-                        fontSize: 12,
-                        height: 1.6,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            const _Panel(
-              icon: Icons.lock_outline_rounded,
-              title: '记录默认私密',
-              text: '上方就是分享卡片的完整内容，不含昵称和身份。分享前仍请检查文字中的个人信息。',
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              _ErrorLabel(_error!),
-            ],
-            const SizedBox(height: 12),
-            const Text(
-              '打开系统分享面板后，由你选择接收方或保存位置。',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: _muted, fontSize: 12, height: 1.6),
-            ),
-          ],
-        ),
-      ),
-    ),
-    bottomNavigationBar: SafeArea(
-      minimum: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-      child: FilledButton.icon(
-        onPressed: _busy ? null : _share,
-        icon: _busy ? const _Spinner() : const Icon(Icons.ios_share_rounded),
-        label: const Text('分享图片卡片'),
-      ),
-    ),
-  );
-}
-
 class VersionPage extends StatelessWidget {
   const VersionPage({super.key, required this.remote});
 
@@ -824,7 +396,7 @@ class VersionPage extends StatelessWidget {
             const _LeafMark(),
             const SizedBox(height: 20),
             const Text(
-              '0.1.1 · 文字测试版',
+              '0.2.0 · 日常探索测试版',
               style: TextStyle(
                 fontSize: 25,
                 fontWeight: FontWeight.w700,
@@ -833,27 +405,22 @@ class VersionPage extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             const Text(
-              '这一版聚焦轻量探索、文字记录和私密回看。',
+              '偏好推荐、多媒体记录和私密回看。',
               style: TextStyle(color: _muted, height: 1.7),
             ),
             const SizedBox(height: 20),
             const _Section(
               '当前可用',
-              '可选择身份和探索偏好，查看每日内容，保存 1–300 个 Unicode 字符的草稿与完成记录，并主动生成图片分享卡或导出 JSON。',
+              '40 项活动会参考探索偏好推荐。记录支持 1–500 个 Unicode 字符、最多 5 张图片、1 段 15 秒视频和 1 段 60 秒语音。支持搜索、联网编辑和自行选择图片分享。',
             ),
-            const _Section(
-              '暂未开放',
-              '图片、录音、视频、定时提醒和密码找回尚未启用。本版不会为这些功能请求摄像头、麦克风、相册或通知权限。',
-            ),
+            const _Section('暂未开放', '定时提醒和密码找回尚未开放；不提供 JSON 导入导出、公共动态或社交互动。'),
             _Section(
               '保存边界',
-              remote
-                  ? '账号、探索进度、草稿和记录会发送到已配置的 API 服务。本机保存登录会话和少量体验状态；当前不是端到端加密服务。'
-                  : '账号、探索进度、草稿和记录只保存在当前安装中。卸载或清除应用数据会丢失内容，记录正文也未额外加密。',
+              '文字与媒体先保存在本机，Wi-Fi 下自动上传，也可为当前队列允许立即上传。最多暂存 20 条待上传记录、500 MiB；账号媒体容量 1 GiB。卸载前请确认上传完成。',
             ),
             const _Section(
               '测试版限制',
-              '当前内容按固定顺序出现，不是 AI 推荐；没有公开动态、社交互动或连续打卡。请勿保存密码、证件、健康资料等敏感或不可替代的信息。',
+              '当前使用规则推荐，不是 AI 生成。联网服务并非端到端加密，测试版尚不构成生产安全或可靠备份承诺；请勿保存敏感或不可替代的信息。',
             ),
             OutlinedButton.icon(
               onPressed: () => Navigator.of(context).push(
@@ -906,10 +473,8 @@ class PrivacyPage extends StatelessWidget {
             const SizedBox(height: 16),
             _Panel(
               icon: Icons.info_outline_rounded,
-              title: remote ? '当前：联网文字测试版' : '当前：单机文字测试版',
-              text: remote
-                  ? '账号及文字记录会发送到已配置的 API 服务。连接模式不代表服务已完成生产安全审计，请仅使用测试内容。'
-                  : '账号、探索进度和文字记录保存在当前安装的应用数据中。没有云同步，昵称只在当前安装内检查重复。',
+              title: '联网账号与本机待上传内容',
+              text: '账号、文字与媒体会发送到已配置的服务。未上传的草稿和记录先保存在本机；请在上传完成前保留应用数据。',
             ),
             const SizedBox(height: 28),
             const _Section(
@@ -918,21 +483,19 @@ class PrivacyPage extends StatelessWidget {
             ),
             _Section(
               '数据存放与安全边界',
-              remote
-                  ? '私人记录通过配置的 API 保存，需要账号鉴权。本机可能仍保存会话信息和体验状态。当前版本不是端到端加密服务，不要记录密码、证件、健康等敏感资料。'
-                  : '本地探索记录没有额外加密保护。Android 已禁用自动备份，但卸载、清除数据或更换手机仍可能丢失账号和记录。系统已解锁、被 root 或被他人接触的设备不在应用可保证的保护范围内。',
+              '私人记录和媒体访问需要账号鉴权。登录令牌保存在平台安全存储中，本机数据库和媒体不是端到端加密保险箱。卸载或清除数据会丢失尚未上传的内容。不要记录密码、证件、健康等敏感资料。',
             ),
             const _Section(
               '不追踪位置，不索取无关权限',
-              '当前不请求 GPS、摄像头、麦克风或相册权限，不记录行动轨迹。本版不支持媒体上传或定时通知；未来通知必须主动开启并选择时间。',
+              '不请求定位，不记录行动轨迹。仅在你选择图库或开始录音时使用所需系统权限；没有拍摄入口或定时通知。媒体经服务端校验与处理后保存，不能承诺清除画面或声音中本身包含的隐私。',
             ),
             const _Section(
               '默认私密，分享由你决定',
               '没有公开信息流，不自动公开完成记录。生成图片卡片前会要求确认，卡片不包含昵称和身份，但你写下的内容仍可能包含隐私。系统分享产生的文件或接收方副本，无法由本应用自动撤回。',
             ),
             const _Section(
-              '删除与导出',
-              '可在单条记录中主动生成并分享图片卡片，也可删除该记录；在账号设置中查看当前提供的导出、数据清除或账号删除操作。删除前请先保存需要保留的内容，不依赖应用提供数据恢复。',
+              '删除与分享',
+              '分享卡默认只有文字，你可主动选择最多 5 张图片；语音和视频不会加入。可删除单条记录，或验证密码后删除账号。删除不可撤销；已分享副本无法收回。当前不提供 JSON 导入导出。',
             ),
             const _Section(
               '不以压力换取完成',
@@ -940,23 +503,13 @@ class PrivacyPage extends StatelessWidget {
             ),
             const _Section(
               '测试版不是生产服务承诺',
-              '本版用于验证流程和感受，未上架，不代表已经部署公共服务或完成合规审查。图片/录音/视频、通知及正式账号恢复需后续实现并测试。请勿保存不可替代的资料。',
+              '本版用于验证流程和感受，未上架，不代表服务完成生产安全或合规审查。通知与账号恢复尚未提供。请勿保存不可替代的资料。',
             ),
           ],
         ),
       ),
     ),
   );
-}
-
-class _CodePointLimit extends TextInputFormatter {
-  const _CodePointLimit(this.maximum);
-  final int maximum;
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) => newValue.text.runes.length <= maximum ? newValue : oldValue;
 }
 
 class _LeafMark extends StatelessWidget {
@@ -1143,28 +696,3 @@ class _Spinner extends StatelessWidget {
     child: CircularProgressIndicator(strokeWidth: 2),
   );
 }
-
-Future<bool> _confirm(
-  BuildContext context,
-  String title,
-  String text,
-  String action,
-) async =>
-    await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(title),
-        content: Text(text, style: const TextStyle(height: 1.7)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: Text(action),
-          ),
-        ],
-      ),
-    ) ??
-    false;
