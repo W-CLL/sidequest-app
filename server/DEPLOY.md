@@ -204,7 +204,7 @@ ssh -L 8788:127.0.0.1:8788 root@<服务器IP>
   referer、via=oss|server）。后台「分发 → 下载统计」聚合展示：今日/累计指标、按天 14 天、
   来源与通道、最近事件（50 条/页）。只统计下载链接的公开访问，App 不采集任何行为数据。
 
-## 附录：Web 版（iOS/浏览器）部署准备（2026-10-14；代码已就绪，待确认后上线）
+## 附录：Web 版（iOS/浏览器）部署记录（2026-10-14 已上线）
 
 网页版由同一仓库构建为 Flutter Web 客户端，计划托管在 `https://zx.desktoppet.online/app`
 （同源、无 CORS、复用现有证书）。上线时按以下步骤执行：
@@ -237,3 +237,7 @@ ssh -L 8788:127.0.0.1:8788 root@<服务器IP>
    后台「登录会话」应显示来源「网页 0.2.0+3」。
 
 本地联调方式见根目录 `BUILDING.md` 的「Web 版」一节（`scripts/serve-web.mjs` 同源代理）。
+
+**已执行（2026-10-14）**：静态产物在 `/www/sidequest-web/current/`（构建：`flutter build web --release --base-href /app/ --output build/web-app`）；nginx 站点配置备份 `/root/zx.conf.bak-20261014`；主服务单元备份 `/root/sidequest.service.bak-20261014`；全站 gzip 类型增加 `application/wasm`（canvaskit 首载 7.3MB，压缩后传输约三分之一）。生产验证：`/app/` 200、后台冒烟 79/79、无头浏览器实测启动零报错、`GET /api/state` 200。
+
+⚠️ 验收注意：zx 站点有爬虫守卫（`sidequest-bot-guard.conf`，挡 curl/wget/python 等脚本 UA）——**手工 curl 探测必须带浏览器 UA**（例如 `-A "Mozilla/5.0 ..."`），否则一律 403；微信/QQ/浏览器/App 不受影响。
