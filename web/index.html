@@ -34,20 +34,87 @@
   <title>支线</title>
   <link rel="manifest" href="manifest.json">
 
+  <!-- 预加载启动关键资源：应用代码 + 引擎脚本（变体按浏览器选择；wasm 不做预加载——
+       与引擎的 fetch 模式不匹配会重复下载，实测 WebKit 下 wasm 预加载反而更慢） -->
+  <link rel="preload" href="main.dart.js" as="script">
+  <script>
+    (function () {
+      var ua = navigator.userAgent;
+      // WebKit 系（Safari / iOS 微信等）与 Firefox 用完整版引擎，其余（Chrome 系）用精简版。
+      var fullVariant = (/Safari\//.test(ua) && !/Chrome|Chromium|CriOS|FxiOS|EdgiOS|OPiOS|Edg\//.test(ua)) || /Firefox\//.test(ua);
+      var l = document.createElement('link');
+      l.rel = 'preload';
+      l.href = (fullVariant ? 'canvaskit/' : 'canvaskit/chromium/') + 'canvaskit.js';
+      l.as = 'script';
+      l.crossOrigin = 'anonymous';
+      document.head.appendChild(l);
+    }());
+  </script>
+
   <style>
+    /* 启动画面：首帧渲染前替代白屏，渲染后由 flutter_bootstrap.js 移除 */
+    #boot-splash {
+      position: fixed; inset: 0; z-index: 50;
+      display: flex; align-items: center; justify-content: center;
+      background: #F7F6F0;
+      transition: opacity .35s ease;
+    }
+    #boot-splash.boot-splash-hide { opacity: 0; pointer-events: none; }
+    .boot-splash-box { text-align: center; animation: boot-breathe 1.5s ease-in-out infinite; }
+    .boot-splash-mark {
+      display: inline-block; width: 64px; height: 64px; border-radius: 16px; margin-bottom: 16px;
+      box-shadow: 0 6px 18px rgba(35, 77, 60, .18);
+    }
+    .boot-splash-logo {
+      font: 600 30px/1.3 -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+      color: #234D3C; letter-spacing: .14em; padding-left: .14em;
+    }
+    .boot-splash-note {
+      margin-top: 12px;
+      font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+      color: #69756C; letter-spacing: .06em;
+    }
+    @keyframes boot-breathe { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+
+    /* 添加到主屏幕提示：仅 iPhone/iPad Safari，弹窗式、可关闭，关掉后不再提示 */
     #add-to-home {
-      position: fixed; left: 12px; right: 12px; bottom: calc(14px + env(safe-area-inset-bottom));
-      z-index: 10; display: flex; justify-content: center; pointer-events: none;
+      position: fixed; left: 0; right: 0; bottom: calc(18px + env(safe-area-inset-bottom));
+      z-index: 10; display: flex; justify-content: center;
+      pointer-events: none; padding: 0 12px;
     }
     #add-to-home[hidden] { display: none; }
-    #add-to-home span {
-      background: #234D3C; color: #F7F6F0; font: 13px/1.6 -apple-system, "PingFang SC", system-ui, sans-serif;
-      padding: 8px 16px; border-radius: 999px; box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
+    .hint-card {
+      position: relative; pointer-events: auto;
+      background: #234D3C; color: #F7F6F0;
+      border-radius: 18px; padding: 14px 48px 14px 20px;
+      max-width: 92vw; box-shadow: 0 6px 20px rgba(32, 59, 49, .28);
+      font: 15px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+      animation: hint-in .45s cubic-bezier(.22, .9, .36, 1) both;
     }
-    #add-to-home b { font-weight: 600; }
+    .hint-title { font-size: 16px; font-weight: 600; }
+    .hint-body { margin-top: 3px; opacity: .92; }
+    .hint-card b { font-weight: 600; }
+    .hint-close {
+      position: absolute; top: 4px; right: 4px;
+      width: 38px; height: 38px; border: 0; padding: 0; margin: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: transparent; color: rgba(247, 246, 240, .75);
+      font-size: 22px; line-height: 1; cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .hint-close:active { color: #F7F6F0; }
+    @keyframes hint-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
 <body>
+  <div id="boot-splash" aria-hidden="true">
+    <div class="boot-splash-box">
+      <img class="boot-splash-mark" src="icons/Icon-192.png" alt="">
+      <div class="boot-splash-logo">支线</div>
+      <div class="boot-splash-note">正在准备…</div>
+    </div>
+  </div>
+
   <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader
@@ -58,9 +125,13 @@
   -->
   <script src="flutter_bootstrap.js" async></script>
 
-  <!-- 只在 iPhone/iPad 的 Safari 中、且尚未“添加到主屏幕”时，提示一次放置入口 -->
+  <!-- 只在 iPhone/iPad 的 Safari 中弹出一次（可关闭，关掉后记住不再提示） -->
   <div id="add-to-home" hidden>
-    <span>把支线放到桌面：点底部的 <b>分享</b>，选「添加到主屏幕」</span>
+    <div class="hint-card">
+      <button class="hint-close" type="button" aria-label="关闭">×</button>
+      <div class="hint-title">把支线放到桌面</div>
+      <div class="hint-body">点底部的 <b>分享</b>，选「添加到主屏幕」</div>
+    </div>
   </div>
   <script>
     (function () {
@@ -69,9 +140,23 @@
       var ua = window.navigator.userAgent;
       var ios = /iPhone|iPad|iPod/.test(ua);
       var iosSafari = ios && /Safari\//.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS|DuckDuckGo/.test(ua);
-      if (!standalone && iosSafari) {
-        document.getElementById('add-to-home').hidden = false;
-      }
+      var dismissed = false;
+      try { dismissed = window.localStorage.getItem('sq-hint-add-home') === '1'; } catch (e) {}
+      if (standalone || !iosSafari || dismissed) return;
+      var box = document.getElementById('add-to-home');
+      var shown = false;
+      var showOnce = function () {
+        if (shown) return;
+        shown = true;
+        setTimeout(function () { box.hidden = false; }, 500);
+      };
+      // 等应用首帧渲染后再弹出，避免和应用启动抢注意力（6 秒兜底）
+      window.addEventListener('flutter-first-frame', showOnce);
+      setTimeout(showOnce, 6000);
+      box.querySelector('.hint-close').addEventListener('click', function () {
+        box.hidden = true;
+        try { window.localStorage.setItem('sq-hint-add-home', '1'); } catch (e) {}
+      });
     }());
   </script>
 </body>

@@ -251,3 +251,5 @@ Flutter Web 发布构建默认从 **gstatic.com（Google CDN）** 拉取 CanvasK
 验证方式（真实 WebKit 引擎 + 屏蔽 gstatic + 零输入）：Playwright `webkit` 打开 `/app/`，`route` 阻断 `gstatic.com|googleapis.com`，截图确认中文正常、0 请求失败。另修复「添加到主屏幕」提示条在非 iOS 设备误显示（`#add-to-home[hidden] { display: none; }`——原 CSS `display:flex` 覆盖了 `hidden` 属性）。
 
 ⚠️ 验收注意：zx 站点有爬虫守卫（`sidequest-bot-guard.conf`，挡 curl/wget/python 等脚本 UA）——**手工 curl 探测必须带浏览器 UA**（例如 `-A "Mozilla/5.0 ..."`），否则一律 403；微信/QQ/浏览器/App 不受影响。
+
+**2026-10-14 晚增量（启动体验与品牌）**：① 品牌图标：把安卓端图标（墨绿底 + 嫩芽）移植为 Web 全套（`web/icons/*`、`web/favicon.png`；用 Pillow 对平色图形做掩膜放大生成，边缘干净）；② 启动画面：`index.html` 静态 splash（图标 + 支线 + 正在准备…），由 `flutter-first-frame` 事件移除，30 秒兜底（慢网络下不至于提前露出白屏）；③ 资源预加载：仅 `main.dart.js`（as=script）与 `canvaskit.js`（as=script + crossorigin，按 UA 选引擎变体）——**wasm 不要预加载**：与引擎 `fetch()` 的模式不匹配，实测 WebKit 会整份重复下载（2 × 2.9MB，反而变慢）；④ 「添加到主屏幕」提示改为可关闭弹窗（右上角 ×，`localStorage: sq-hint-add-home` 记忆，首帧后弹出，仅 iPhone/iPad Safari）。
