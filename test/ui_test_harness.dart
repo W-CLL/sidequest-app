@@ -73,6 +73,9 @@ AppSnapshot snapshotFixture({
 
 /// Deterministic UI-only fixture. No production account/storage fallback.
 class InMemoryQuestRepository implements QuestRepository {
+  @override
+  bool get isWebClient => false;
+
   InMemoryQuestRepository([AppSnapshot? initial])
     : snapshot = initial ?? AppSnapshot(day: testNow);
   AppSnapshot snapshot;

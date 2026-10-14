@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 import 'domain.dart';
 import 'media_widgets.dart';
 import 'repository.dart';
+import 'exit_guard_io.dart' if (dart.library.js_interop) 'exit_guard_web.dart' as exit_guard;
 import 'voice.dart';
 
 const _muted = Color(0xFF69756C);
@@ -50,8 +51,14 @@ class _RecordPageState extends State<RecordPage> with WidgetsBindingObserver {
   String? _accountId, _error;
   String? _editorBranchId, _conflictDraftId, _contextNotice;
   bool _opening = false;
-  String _saveStatus = '停笔 1 秒后自动保存到本机';
+  late String _saveStatus = _autoSaveHint;
   Timer? _debounce;
+
+  // 安卓/桌面草稿落在本机；网页版直接存服务端，文案随之区分。
+  bool get _localDraft => !widget.repository.isWebClient;
+  String get _autoSaveHint => _localDraft ? '停笔 1 秒后自动保存到本机' : '停笔 1 秒后自动保存';
+  String get _savingLabel => _localDraft ? '正在保存到本机…' : '正在保存…';
+  String get _savedLabel => _localDraft ? '草稿已存本机' : '草稿已保存';
   Future<bool>? _saving;
   int _generation = 0, _savedGeneration = 0;
   final _removedMedia = <String>{};
@@ -61,6 +68,10 @@ class _RecordPageState extends State<RecordPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 网页版：草稿还在保存时关闭/刷新页面，交给浏览器做通用离开确认（其他平台为空实现）。
+    exit_guard.attachUnsavedDraftGuard(
+      () => mounted && _editorReady && _generation != _savedGeneration,
+    );
     _accountId = widget.accountId;
     _text = TextEditingController(
       text: widget.conflictDraftId == null ? '' : widget.initialDraft,
@@ -101,7 +112,7 @@ class _RecordPageState extends State<RecordPage> with WidgetsBindingObserver {
         _editorBranchId = editor.branchId;
         _accountId = editor.snapshot.profile?.id;
         _attachments = List.of(editor.snapshot.draftAttachments);
-        _saveStatus = '停笔 1 秒后自动保存到本机';
+        _saveStatus = _autoSaveHint;
       });
     } catch (error) {
       if (mounted) setState(() => _error = _errorText(error));
@@ -151,7 +162,8 @@ class _RecordPageState extends State<RecordPage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if ((state == AppLifecycleState.inactive ||
-            state == AppLifecycleState.paused) &&
+            state == AppLifecycleState.paused ||
+            state == AppLifecycleState.hidden) &&
         !_busy) {
       _debounce?.cancel();
       unawaited(_save());
@@ -178,7 +190,7 @@ class _RecordPageState extends State<RecordPage> with WidgetsBindingObserver {
     _saving = null;
     if (ok && notify && mounted) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('草稿已存本机。')));
+          .showSnackBar(SnackBar(content: Text('$_savedLabel。')));
     }
     return ok;
   }
@@ -192,7 +204,7 @@ class _RecordPageState extends State<RecordPage> with WidgetsBindingObserver {
           final attachments = List<MediaAttachment>.of(_attachments);
           if (mounted) {
             setState(() {
-              _saveStatus = '正在保存到本机…';
+              _saveStatus = _savingLabel;
               _error = null;
             });
           }
@@ -220,7 +232,7 @@ class _RecordPageState extends State<RecordPage> with WidgetsBindingObserver {
         await _discardRemovedMedia();
         if (_generation == _savedGeneration) break;
       }
-      if (mounted) setState(() => _saveStatus = '草稿已存本机');
+      if (mounted) setState(() => _saveStatus = _savedLabel);
       return true;
     } catch (error) {
       if (mounted) {
@@ -242,7 +254,9 @@ class _RecordPageState extends State<RecordPage> with WidgetsBindingObserver {
       _removedMedia.removeAll(unused);
     } catch (_) {
       if (mounted) {
-        setState(() => _error = '内容已保存，移除附件的本机副本暂未清理。下次保存时重试。');
+        setState(() => _error = _localDraft
+            ? '内容已保存，移除附件的本机副本暂未清理。下次保存时重试。'
+            : '内容已保存，移除的附件暂未清理，下次保存时重试。');
       }
     }
   }
@@ -394,9 +408,11 @@ class _RecordPageState extends State<RecordPage> with WidgetsBindingObserver {
                 onError: (error) => setState(() => _error = error),
               ),
             const SizedBox(height: 12),
-            const Text(
-              '写下来，就留住了。稍后自动同步，只有你能看到。',
-              style: TextStyle(fontSize: 12, color: _muted, height: 1.5),
+            Text(
+              widget.repository.isWebClient
+                  ? '写下来，就留住了。只有你能看到。'
+                  : '写下来，就留住了。稍后自动同步，只有你能看到。',
+              style: const TextStyle(fontSize: 12, color: _muted, height: 1.5),
             ),
             if (_error != null) ...[
               const SizedBox(height: 8),

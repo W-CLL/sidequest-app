@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sidequest/domain.dart';
 import 'package:sidequest/media_normalizer.dart';
 import 'package:sidequest/offline_store.dart';
+import 'package:sidequest/remote_repository.dart';
 import 'package:sidequest/repository.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 

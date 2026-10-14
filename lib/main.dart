@@ -8,7 +8,7 @@ import 'repository.dart';
 import 'pages.dart';
 import 'widgets.dart';
 import 'media_widgets.dart';
-import 'sync_worker.dart';
+import 'sync_boot_io.dart' if (dart.library.js_interop) 'sync_boot_web.dart' as sync_boot;
 import 'voice.dart';
 
 void main() {
@@ -20,7 +20,7 @@ void main() {
       ),
     ),
   );
-  unawaited(initializeBackgroundSync());
+  unawaited(sync_boot.initializeBackgroundSync());
 }
 
 class SideQuestApp extends StatelessWidget {
@@ -998,7 +998,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 8),
         Text(
-          '先记下，稍后自动同步 · 只有你能看到',
+          repo.isWebClient ? '写下的会保存 · 只有你能看到' : '先记下，稍后自动同步 · 只有你能看到',
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 11, color: muted),
         ),
@@ -1191,7 +1191,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         () => Navigator.push(
           context,
           MaterialPageRoute<void>(
-            builder: (_) => VersionPage(remote: repo.isRemote),
+            builder: (_) => VersionPage(remote: repo.isRemote, web: repo.isWebClient),
           ),
         ),
       ),
@@ -1208,21 +1208,25 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
       ),
     ];
     final account = <Widget>[
-      menu(
-        Icons.cloud_upload_outlined,
-        '同步',
-        _syncSummary?.requiresLogin == true
-            ? '登录已过期 · 点这里重新登录'
-            : _syncSummary == null
-            ? '稍后自动同步'
-            : '待同步 ${_syncSummary!.pending} · 失败 ${_syncSummary!.failed}',
-        _openSync,
-      ),
-      menu(Icons.logout, '退出登录', '没同步的内容留在手机里，登录后继续', () async {
+      // 网页版没有本地同步队列：不显示「同步」入口。
+      if (!repo.isWebClient)
+        menu(
+          Icons.cloud_upload_outlined,
+          '同步',
+          _syncSummary?.requiresLogin == true
+              ? '登录已过期 · 点这里重新登录'
+              : _syncSummary == null
+              ? '稍后自动同步'
+              : '待同步 ${_syncSummary!.pending} · 失败 ${_syncSummary!.failed}',
+          _openSync,
+        ),
+      menu(Icons.logout, '退出登录', repo.isWebClient ? '退出后要重新登录' : '没同步的内容留在手机里，登录后继续', () async {
         if (await confirm(
           context,
           '退出登录？',
-          '再次登录需要昵称和密码。没同步的内容和草稿会留在手机里，别的账号看不到。',
+          repo.isWebClient
+              ? '退出登录后，需要昵称和密码重新登录。'
+              : '再次登录需要昵称和密码。没同步的内容和草稿会留在手机里，别的账号看不到。',
           '退出登录',
         )) {
           await change(() => repo.logout());

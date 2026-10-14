@@ -216,8 +216,10 @@ class _LoginPageState extends State<LoginPage> {
           ],
           _Panel(
             icon: Icons.info_outline_rounded,
-            title: '先记下，再同步',
-            text: '创建账号需要网络；已经记下的内容会留在手机里，稍后自动同步。',
+            title: widget.repository.isWebClient ? '写下来，再保存' : '先记下，再同步',
+            text: widget.repository.isWebClient
+                ? '创建账号需要网络；写下的内容会保存到你的账号里。'
+                : '创建账号需要网络；已经记下的内容会留在手机里，稍后自动同步。',
           ),
           SizedBox(
             width: double.infinity,
@@ -379,9 +381,9 @@ class QuestDetail extends StatelessWidget {
 }
 
 class VersionPage extends StatelessWidget {
-  const VersionPage({super.key, required this.remote});
+  const VersionPage({super.key, required this.remote, this.web = false});
 
-  final bool remote;
+  final bool remote, web;
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -415,7 +417,9 @@ class VersionPage extends StatelessWidget {
             ),
             _Section(
               '保存方式',
-              '内容先存在手机里，稍后自动同步；卸载前请确认同步完成。',
+              web
+                  ? '内容直接保存到你的账号里，换个设备也能接着看。'
+                  : '内容先存在手机里，稍后自动同步；卸载前请确认同步完成。',
             ),
             const _Section('请留意', '不要用它保存证件、密码这类敏感资料。'),
             OutlinedButton.icon(

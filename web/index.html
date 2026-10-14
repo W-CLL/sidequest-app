@@ -23,6 +23,7 @@
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="支线">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
@@ -32,6 +33,18 @@
 
   <title>支线</title>
   <link rel="manifest" href="manifest.json">
+
+  <style>
+    #add-to-home {
+      position: fixed; left: 12px; right: 12px; bottom: calc(14px + env(safe-area-inset-bottom));
+      z-index: 10; display: flex; justify-content: center; pointer-events: none;
+    }
+    #add-to-home span {
+      background: #234D3C; color: #F7F6F0; font: 13px/1.6 -apple-system, "PingFang SC", system-ui, sans-serif;
+      padding: 8px 16px; border-radius: 999px; box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
+    }
+    #add-to-home b { font-weight: 600; }
+  </style>
 </head>
 <body>
   <!--
@@ -43,5 +56,22 @@
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
   <script src="flutter_bootstrap.js" async></script>
+
+  <!-- 只在 iPhone/iPad 的 Safari 中、且尚未“添加到主屏幕”时，提示一次放置入口 -->
+  <div id="add-to-home" hidden>
+    <span>把支线放到桌面：点底部的 <b>分享</b>，选「添加到主屏幕」</span>
+  </div>
+  <script>
+    (function () {
+      var standalone = window.navigator.standalone === true ||
+        window.matchMedia('(display-mode: standalone)').matches;
+      var ua = window.navigator.userAgent;
+      var ios = /iPhone|iPad|iPod/.test(ua);
+      var iosSafari = ios && /Safari\//.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS|DuckDuckGo/.test(ua);
+      if (!standalone && iosSafari) {
+        document.getElementById('add-to-home').hidden = false;
+      }
+    }());
+  </script>
 </body>
 </html>

@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:workmanager/workmanager.dart';
 
 import 'repository.dart';
+import 'remote_repository.dart';
 import 'sync_schedule.dart';
 
 QuestRepository? _runningRepository;
