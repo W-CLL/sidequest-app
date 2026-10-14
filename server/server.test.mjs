@@ -20,6 +20,121 @@ test('protocol is mandatory; guest state is lightweight; exports are absent', as
   assert.equal((await api('state?token=secret')).status, 400); assert.equal(guest.headers.get('cache-control'), 'no-store');
 });
 
+test('client diagnostics are accepted silently, stored locally, and never require a session', async (t) => {
+  const { base, register, directory } = await fixture(t);
+  const post = (body, token) => fetch(`${base}/api/diagnostics`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: typeof body === 'string' ? body : JSON.stringify(body) });
+  assert.equal((await post({ scope: 'home.load', message: 'boom', type: 'StateError' })).status, 204);
+  const { token } = (await register()).body;
+  assert.equal((await post({ scope: 'request:sync', message: 'SocketException: connection reset', type: 'SocketException' }, token)).status, 204);
+  assert.equal((await post('{not-json', undefined)).status, 204);
+  const lines = readFileSync(join(directory, 'diagnostics.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0].scope, 'home.load'); assert.equal(lines[0].accountId, null); assert.ok(lines[0].at);
+  assert.equal(lines[1].scope, 'request:sync'); assert.ok(lines[1].accountId); assert.equal(lines[1].type, 'SocketException');
+});
+
+test('download page, latest APK, and legal pages are public; the link always tracks the newest build', async (t) => {
+  const { base, directory } = await fixture(t);
+  assert.equal((await fetch(`${base}/`, { redirect: 'manual' })).status, 302);
+  const empty = await fetch(`${base}/download`);
+  assert.equal(empty.status, 200);
+  assert.ok((await empty.text()).includes('暂时还没有可下载的版本'));
+  assert.equal((await fetch(`${base}/download/latest`)).status, 404);
+  mkdirSync(join(directory, 'apk'), { recursive: true });
+  writeFileSync(join(directory, 'apk', 'sidequest-0.2.0.apk'), 'fake-apk-bytes');
+  const page = await fetch(`${base}/download`);
+  assert.equal(page.status, 200);
+  assert.ok((await page.text()).includes('sidequest-0.2.0.apk'));
+  const apk = await fetch(`${base}/download/latest`);
+  assert.equal(apk.status, 200);
+  assert.equal(apk.headers.get('content-type'), 'application/vnd.android.package-archive');
+  assert.equal(await apk.text(), 'fake-apk-bytes');
+  const head = await fetch(`${base}/download/latest`, { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('content-type'), 'application/vnd.android.package-archive');
+  assert.equal(head.headers.get('content-length'), String('fake-apk-bytes'.length));
+  assert.equal((await fetch(`${base}/download`, { method: 'HEAD' })).status, 200);
+  assert.equal((await fetch(`${base}/`, { method: 'HEAD', redirect: 'manual' })).status, 302);
+  const privacy = await fetch(`${base}/privacy`);
+  assert.equal(privacy.status, 200);
+  assert.ok((await privacy.text()).includes('隐私政策'));
+  assert.ok((await (await fetch(`${base}/terms`)).text()).includes('用户条款'));
+});
+
+test('download falls back to server bandwidth when OSS is unavailable', async (t) => {
+  const attempts = [];
+  const { base, directory } = await fixture(t, { oss: {
+    config: { region: 'oss-cn-hangzhou', endpoint: 'oss-cn-hangzhou.aliyuncs.com', bucket: 'cllllc',
+      accessKeyId: 'test-key', accessKeySecret: 'test-secret', prefix: 'sidequest', urlExpires: 900,
+      downloadDomain: 'oss-download.desktoppet.online' },
+    fetchImpl: async (url, init) => { attempts.push({ url: String(url), method: init?.method }); throw new Error('OSS unreachable'); },
+  } });
+  mkdirSync(join(directory, 'apk'), { recursive: true });
+  writeFileSync(join(directory, 'apk', 'sidequest-0.2.0.apk'), 'fake-apk-bytes');
+  const first = await fetch(`${base}/download/latest`);
+  assert.equal(first.status, 200);
+  assert.equal(await first.text(), 'fake-apk-bytes');
+  assert.ok(attempts.length >= 1);
+  assert.ok(attempts[0].url.startsWith('https://oss-download.desktoppet.online/'));
+  const probes = attempts.length;
+  const second = await fetch(`${base}/download/latest`);
+  assert.equal(second.status, 200);
+  assert.equal(await second.text(), 'fake-apk-bytes');
+  assert.equal(attempts.length, probes); // 冷却期内直接回退，不再探测
+});
+
+test('download redirects to the signed OSS url once the object is verified', async (t) => {
+  const calls = [];
+  const size = String('fake-apk-bytes'.length);
+  const { base, directory } = await fixture(t, { oss: {
+    config: { region: 'oss-cn-hangzhou', endpoint: 'oss-cn-hangzhou.aliyuncs.com', bucket: 'cllllc',
+      accessKeyId: 'test-key', accessKeySecret: 'test-secret', prefix: 'sidequest', urlExpires: 900,
+      downloadDomain: 'oss-download.desktoppet.online' },
+    fetchImpl: async (url, init) => {
+      calls.push({ url: String(url), method: init?.method });
+      return { status: 200, headers: { get: (name) => name === 'content-length' ? size : null } };
+    },
+  } });
+  mkdirSync(join(directory, 'apk'), { recursive: true });
+  writeFileSync(join(directory, 'apk', 'sidequest-0.2.0.apk'), 'fake-apk-bytes');
+  const redirect = await fetch(`${base}/download/latest`, { redirect: 'manual' });
+  assert.equal(redirect.status, 302);
+  const location = redirect.headers.get('location');
+  assert.ok(location.startsWith('https://oss-download.desktoppet.online/sidequest/sidequest-0.2.0.apk?'));
+  assert.ok(location.includes('OSSAccessKeyId='));
+  assert.ok(location.includes('Signature='));
+  assert.equal(calls[0].method, 'HEAD');
+  const head = await fetch(`${base}/download/latest`, { method: 'HEAD', redirect: 'manual' });
+  assert.equal(head.status, 302);
+  assert.ok(head.headers.get('location').includes('Signature='));
+});
+
+test('download page visits and download requests are recorded for stats', async (t) => {
+  const { base, directory } = await fixture(t);
+  mkdirSync(join(directory, 'apk'), { recursive: true });
+  writeFileSync(join(directory, 'apk', 'sidequest-0.2.0.apk'), 'fake-apk-bytes');
+  const wechat = { 'User-Agent': 'Mozilla/5.0 (Linux) MicroMessenger/8.0.49', 'X-Real-IP': '203.0.113.7' };
+  await fetch(`${base}/download`, { headers: wechat });
+  await fetch(`${base}/download/latest`, { headers: { ...wechat, Referer: `${base}/download` } });
+  await fetch(`${base}/download/latest`, { method: 'HEAD', headers: { 'User-Agent': 'probe/1.0' } });
+  await fetch(`${base}/download/latest`, { headers: { 'User-Agent': 'curl/8.0' } });
+  await delay(200); // 事件为异步落盘
+  const lines = readFileSync(join(directory, 'downloads.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(lines.length, 3); // HEAD 探测不计数
+  assert.equal(lines[0].type, 'page');
+  assert.equal(lines[0].ip, '203.0.113.7');
+  assert.equal(lines[0].source, 'wechat');
+  assert.equal(lines[1].type, 'apk');
+  assert.equal(lines[1].via, 'server');
+  assert.equal(lines[1].apk, 'sidequest-0.2.0.apk');
+  assert.ok(lines[1].referer.endsWith('/download'));
+  assert.equal(lines[1].source, 'wechat');
+  assert.equal(lines[2].source, 'browser'); // curl 记浏览器类，不算微信
+  assert.equal(lines[2].referer, null);
+});
+
 test('normalized accounts, password hashing and session isolation remain intact', async (t) => {
   const { app, api, register } = await fixture(t);
   const results = await Promise.all([register('Ａlice'), register('alice')]); assert.deepEqual(results.map((r) => r.status).sort(), [201,409]);
@@ -29,6 +144,24 @@ test('normalized accounts, password hashing and session isolation remain intact'
   const login = await api('login', { nickname: 'ALICE', password }); assert.equal(login.body.state.profile.id, alice.state.profile.id);
   assert.equal((await api('login', { nickname: 'ALICE', password: 'incorrect-password' })).status, 401);
   assert.equal((await api('logout', {}, alice.token)).status, 200); assert.equal((await api('state', undefined, alice.token)).status, 401); assert.equal((await api('state', undefined, login.body.token)).status, 200);
+});
+
+test('active sessions renew on use while idle ones still expire', async (t) => {
+  const { app, api, register, setTime } = await fixture(t);
+  const day = 24 * 60 * 60 * 1000;
+  const alice = (await register('Alice')).body, bob = (await register('Bob')).body;
+  const expires = (nickname) => app.db.prepare('SELECT expires_at FROM sessions WHERE user_id=(SELECT id FROM users WHERE nickname=?)').get(nickname).expires_at;
+  const issued = expires('Alice');
+  assert.equal(issued, expires('Bob'));
+  const start = issued - 7 * day;
+  assert.equal((await api('state', undefined, alice.token)).status, 200);
+  assert.equal(expires('Alice'), issued);
+  setTime(new Date(start + 6 * day));
+  assert.equal((await api('state', undefined, alice.token)).status, 200);
+  assert.equal(expires('Alice'), start + 13 * day);
+  setTime(new Date(start + 8 * day));
+  assert.equal((await api('state', undefined, alice.token)).status, 200);
+  assert.equal((await api('state', undefined, bob.token)).status, 401);
 });
 
 test('offline batch commits once; duplicate IDs with changed content are rejected atomically', async (t) => {

@@ -249,9 +249,12 @@ class OfflineStore {
             onConfigure: (database) async {
               // A native busy timeout can block the FFI isolate that must release
               // the lock. The outer asynchronous retry handles native contention.
-              await database.execute('PRAGMA busy_timeout = 0');
-              await database.execute('PRAGMA foreign_keys = ON');
-              await database.execute('PRAGMA journal_mode = WAL');
+              // PRAGMAs must run through rawQuery: Android's execute/execSQL path
+              // rejects statements SQLite classifies as read-only (e.g.
+              // busy_timeout), which aborts the whole open on Android 16.
+              await database.rawQuery('PRAGMA busy_timeout = 0');
+              await database.rawQuery('PRAGMA foreign_keys = ON');
+              await database.rawQuery('PRAGMA journal_mode = WAL');
             },
             onCreate: (database, _) async {
               await database.execute('''
@@ -1842,7 +1845,7 @@ WHERE command_id IN ($placeholders)''',
         syncError: status == 'failed'
             ? (failure?['last_error'] as String? ??
                   commandFailure?['last_error'] as String? ??
-                  '附件处理失败，请重试或移除附件后上传文字。')
+                  '附件处理失败，请重试或移除附件后仅同步文字。')
             : null,
       );
     }).toList();
@@ -1892,7 +1895,7 @@ WHERE command_id IN ($placeholders)''',
       limit: 1,
     );
     if (entries.isEmpty || entries.single['pending'] != 1) {
-      throw const QuestException('这条记录已不在待同步队列，请刷新后查看。');
+      throw const QuestException('这条记录已不在待同步列表中，请刷新后查看。');
     }
     final rows = await txn.query(
       'outbox',

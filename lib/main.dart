@@ -9,6 +9,7 @@ import 'pages.dart';
 import 'widgets.dart';
 import 'media_widgets.dart';
 import 'sync_worker.dart';
+import 'voice.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -100,18 +101,13 @@ class ConfigurationPage extends StatelessWidget {
             Icon(Icons.settings_ethernet, size: 44, color: forest),
             SizedBox(height: 16),
             Text(
-              '尚未配置服务地址',
+              '暂时连不上服务',
               key: Key('service-not-configured'),
               style: heading,
             ),
             SizedBox(height: 12),
             Text(
-              '此版本使用联网账号。请安装已配置服务地址的测试包，或在构建时设置 API_BASE_URL。不会创建仅存在本机的临时账号。',
-              style: secondary,
-            ),
-            SizedBox(height: 16),
-            Text(
-              '服务地址需要 HTTPS；开发时仅允许本机回环 HTTP。不要把令牌或密码放入地址。',
+              '请更新到最新版本后再试。',
               style: secondary,
             ),
           ],
@@ -206,7 +202,8 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
       if (snapshot.profile != null) unawaited(_loadJournal());
       unawaited(_refreshSyncSummary());
     } catch (e) {
-      if (mounted) setState(() => error = '$e');
+      repo.reportProblem(e, 'home.load');
+      if (mounted) setState(() => error = userMessageFor(e));
     }
   }
 
@@ -270,8 +267,9 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         _journalCursor = page.nextCursor;
       });
     } catch (error) {
+      repo.reportProblem(error, 'journal.load');
       if (mounted && generation == _journalGeneration) {
-        setState(() => _journalError = '$error');
+        setState(() => _journalError = userMessageFor(error));
       }
     } finally {
       if (mounted && generation == _journalGeneration) {
@@ -341,7 +339,8 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
       }
       return true;
     } catch (e) {
-      toast('$e');
+      repo.reportProblem(e, 'action');
+      toast(userMessageFor(e));
       return false;
     } finally {
       if (mounted) setState(() => busy = false);
@@ -358,7 +357,8 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
       await prefs.setStringList('ui_preferences', selectedPreferences);
       if (mounted) setState(() => onboarding = -1);
     } catch (e) {
-      toast('偏好未能保存在设备上，请重试：$e');
+      repo.reportProblem(e, 'preferences.local');
+      toast('偏好没存上，请再试一次。');
     }
   }
 
@@ -429,9 +429,9 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         context: context,
         builder: (context) => AlertDialog(
           icon: const Icon(Icons.spa_outlined, color: forest, size: 48),
-          title: Text(saved ? '已保存到探索册' : '已存到本机，等待上传'),
+          title: Text(saved ? '已保存到探索册' : '已记下，等待同步'),
           content: Text(
-            saved ? '服务已确认保存，可在探索册查看。' : 'Wi-Fi 下自动上传。可在“上传与同步”中查看进度或立即上传。',
+            saved ? '已保存到探索册，随时可以回看。' : '稍后会自动同步；也可以在“同步”里立即上传。',
           ),
           actions: [
             TextButton(
@@ -998,7 +998,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 8),
         Text(
-          '记录先存本机 · Wi-Fi 下自动上传 · 默认私密',
+          '先记下，稍后自动同步 · 只有你能看到',
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 11, color: muted),
         ),
@@ -1076,7 +1076,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         ),
       ),
       const SizedBox(height: 12),
-      const IconLabel(Icons.lock_outline, '默认私密，不会自动公开'),
+      const IconLabel(Icons.lock_outline, '只有你能看到，不会公开'),
       const SizedBox(height: 12),
       if (_journalError != null) ErrorNotice(_journalError!),
       if (_journalEntries.isEmpty &&
@@ -1210,17 +1210,19 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
     final account = <Widget>[
       menu(
         Icons.cloud_upload_outlined,
-        '上传与同步',
-        _syncSummary == null
-            ? 'Wi-Fi 下自动上传'
-            : '待上传 ${_syncSummary!.pending} · 失败 ${_syncSummary!.failed}',
+        '同步',
+        _syncSummary?.requiresLogin == true
+            ? '登录已过期 · 点这里重新登录'
+            : _syncSummary == null
+            ? '稍后自动同步'
+            : '待同步 ${_syncSummary!.pending} · 失败 ${_syncSummary!.failed}',
         _openSync,
       ),
-      menu(Icons.logout, '退出登录', '待上传内容留在本机，登录原账号后继续', () async {
+      menu(Icons.logout, '退出登录', '没同步的内容留在手机里，登录后继续', () async {
         if (await confirm(
           context,
           '退出登录？',
-          '再次登录需要昵称和密码。待上传内容和草稿保留在本机，其他账号无法查看或上传。',
+          '再次登录需要昵称和密码。没同步的内容和草稿会留在手机里，别的账号看不到。',
           '退出登录',
         )) {
           await change(() => repo.logout());
@@ -1260,7 +1262,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
                     ),
                   ),
                   const SizedBox(height: 2),
-                  const Text('私人账号', style: secondary),
+                  const Text('你的账号', style: secondary),
                 ],
               ),
             ),
@@ -1282,7 +1284,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
         ],
         const SizedBox(height: 10),
         Text(
-          '测试版 · 未上传内容请保留本机数据',
+          '没同步的内容请勿清理应用数据',
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 11, color: muted),
         ),

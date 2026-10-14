@@ -2,18 +2,24 @@ import { createServer } from 'node:http';
 import { randomBytes, randomUUID, createHash, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { dirname, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { quests, questTitle, recommendQuest, appendRecommendation } from './catalog.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { quests, questTitle, recommendQuest, appendRecommendation, firstEnabledId } from './catalog.mjs';
 import { assert, canonical, fields, HttpError, identifier } from './errors.mjs';
 import { openDatabase, transaction } from './database.mjs';
 import { FfmpegProcessor, MediaStore, mediaJson } from './media.mjs';
+import { OssClient, resolveOssConfig } from './oss.mjs';
 import { acquireDataLock } from './service-lock.mjs';
+import { createReadStream } from 'node:fs';
+import { appendFile, readdir, readFile, stat } from 'node:fs/promises';
 
+const serverDir = dirname(fileURLToPath(import.meta.url));
 const deriveKey = promisify(scrypt);
 const roles = new Set(['student','employee','freelancer','leader','caregiver','retired','transition','other']);
 const preferenceChoices = new Set(['安静独处','熟人同行','观察细节','动手创作','尝试新鲜','熟悉安心']);
 const passwordOptions = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 const SESSION_MS = 7 * 24 * 60 * 60 * 1000;
+// 滑动续期节奏：距上次延长超过 24 小时才写库（活跃用户每天续，闲置用户仍会到期）
+const SESSION_RENEW_AFTER_MS = 24 * 60 * 60 * 1000;
 const MAX_BODY_BYTES = 16 * 1024;
 const dateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' });
 const digest = (value) => createHash('sha256').update(value).digest('hex');
@@ -85,8 +91,86 @@ function readJson(request) {
   });
 }
 
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
+
+// 极简 Markdown 渲染：只支持我们法律文档用到的子集（# / ## / - / **加粗** / 段落）。
+function renderMarkdown(markdown) {
+  const out = [];
+  let inList = false;
+  const inline = (text) => escapeHtml(text).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+  for (const raw of markdown.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) { closeList(); continue; }
+    if (line.startsWith('## ')) { closeList(); out.push(`<h2>${inline(line.slice(3))}</h2>`); continue; }
+    if (line.startsWith('# ')) { closeList(); out.push(`<h1>${inline(line.slice(2))}</h1>`); continue; }
+    if (line.startsWith('- ')) { if (!inList) { out.push('<ul>'); inList = true; } out.push(`<li>${inline(line.slice(2))}</li>`); continue; }
+    closeList();
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  closeList();
+  return out.join('\n');
+}
+
+function pageShell(title, body) {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<style>
+body { margin: 0; background: #f7f6f0; color: #203b31; font: 16px/1.8 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; }
+main { max-width: 640px; margin: 0 auto; padding: 36px 22px 72px; }
+h1 { font-size: 24px; margin: 0 0 6px; }
+h2 { font-size: 17px; margin: 30px 0 8px; }
+p, li { color: #3a4a40; margin: 8px 0; }
+ul { padding-left: 20px; }
+a { color: #234d3c; }
+.btn { display: block; margin: 26px 0 10px; padding: 14px 18px; border-radius: 14px; background: #234d3c; color: #ffffff; text-align: center; font-size: 17px; font-weight: 600; text-decoration: none; }
+.meta { color: #69756c; font-size: 13px; }
+strong { color: #203b31; }
+</style>
+</head>
+<body>
+<main>
+${body}
+</main>
+</body>
+</html>`;
+}
+
+function respondHtml(response, status, html, allowedOrigin) {
+  response.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...(allowedOrigin ? { 'Access-Control-Allow-Origin': allowedOrigin, Vary: 'Origin' } : {}) });
+  response.end(html);
+}
+
+function formatBytes(size) {
+  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(size / 1024))} KB`;
+}
+
+function downloadPage(apk) {
+  const latest = apk
+    ? `<a class="btn" href="/download/latest">下载最新版本</a>
+<p class="meta">${escapeHtml(apk.name)} · ${formatBytes(apk.size)} · 更新于 ${escapeHtml(new Date(apk.mtimeMs).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }))}</p>`
+    : '<p>暂时还没有可下载的版本，稍后再来看看。</p>';
+  return pageShell('支线 · 下载', `<h1>支线</h1>
+<p>每天一件 5–10 分钟的小事，重新看见平常的日子；把发现记进只属于你的探索册。</p>
+${latest}
+<h2>安装提示</h2>
+<ul>
+<li>手机提示「不允许安装未知应用」时，按提示允许一次，再重新安装即可。</li>
+<li>装过旧版本：直接下载安装即可覆盖更新，已同步的记录不受影响。</li>
+<li>更新前如果还有内容没同步完，先等它同步完再更新。</li>
+</ul>
+<h2>关于</h2>
+<p><a href="/privacy">隐私政策</a> · <a href="/terms">用户条款</a></p>`);
+}
+
 export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDirectory, now = () => new Date(), allowedOrigins = [],
-  authLimit = 30, authWindowMs = 15 * 60 * 1000, maxConcurrentAuth = 4, mediaProcessor, mediaTools, accountMediaLimit } = {}) {
+  authLimit = 30, authWindowMs = 15 * 60 * 1000, maxConcurrentAuth = 4, mediaProcessor, mediaTools, accountMediaLimit, apkDirectory, oss: ossOption } = {}) {
   const processor = mediaProcessor ?? new FfmpegProcessor(mediaTools);
   const releaseLock = acquireDataLock(databasePath);
   let db;
@@ -94,6 +178,126 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
   let media;
   try { media = new MediaStore({ db, root: mediaDirectory ?? join(dirname(resolve(databasePath)), 'media'), now, processor, accountLimit: accountMediaLimit }); }
   catch (error) { db.close(); releaseLock(); throw error; }
+
+  // 客户端静默上报：只落盘诊断日志，绝不阻塞或打扰用户（客户端见 lib/silent_reporter.dart）。
+  const diagnosticsPath = join(dirname(resolve(databasePath)), 'diagnostics.jsonl');
+  const MAX_DIAGNOSTICS_BYTES = 4 * 1024 * 1024;
+  async function recordDiagnostic(request, body) {
+    try {
+      let accountId = null;
+      try { accountId = authenticate(request, true)?.id ?? null; } catch { accountId = null; }
+      const clip = (value, max) => (typeof value === 'string' ? value.slice(0, max) : null);
+      const info = await stat(diagnosticsPath).catch(() => null);
+      if (info && info.size > MAX_DIAGNOSTICS_BYTES) return;
+      await appendFile(diagnosticsPath, `${JSON.stringify({ at: now().toISOString(), scope: clip(body?.scope, 80), type: clip(body?.type, 120), message: clip(body?.message, 500), client: clip(body?.client, 80), accountId })}\n`);
+    } catch { /* 上报失败不影响任何流程 */ }
+  }
+  // 下载统计：落地页访问与下载请求写 <数据目录>/downloads.jsonl（后台「下载统计」聚合展示）。
+  // 只统计下载链接的公开访问；支线 App 不采集任何行为数据。
+  const downloadsPath = join(dirname(resolve(databasePath)), 'downloads.jsonl');
+  const MAX_DOWNLOADS_BYTES = 4 * 1024 * 1024;
+  async function recordDownloadEvent(request, type, extra = {}) {
+    try {
+      const info = await stat(downloadsPath).catch(() => null);
+      if (info && info.size > MAX_DOWNLOADS_BYTES) return;
+      const clip = (value, max) => (typeof value === 'string' ? value.slice(0, max) : null);
+      const forwarded = String(request.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
+      const ip = String(request.headers['x-real-ip'] ?? '').trim() || forwarded || String(request.socket.remoteAddress ?? '');
+      const userAgent = clip(request.headers['user-agent'] ?? '', 220) ?? '';
+      const referer = clip(request.headers.referer ?? null, 220);
+      const source = /MicroMessenger/i.test(userAgent) ? 'wechat'
+        : /QQ\//i.test(userAgent) ? 'qq'
+        : userAgent ? 'browser' : 'other';
+      await appendFile(downloadsPath, `${JSON.stringify({ at: now().toISOString(), type, ip: clip(ip, 64), source, referer, ua: userAgent, ...extra })}\n`);
+    } catch { /* 统计失败不影响任何下载流程 */ }
+  }
+  // 分发：把新构建的 APK 放进此目录，/download 始终指向最新的一个（按修改时间）。
+  const apkRoot = apkDirectory ?? join(dirname(resolve(databasePath)), 'apk');
+  async function latestApk() {
+    try {
+      const entries = await readdir(apkRoot, { withFileTypes: true });
+      let best = null;
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.apk')) continue;
+        const filePath = join(apkRoot, entry.name);
+        const info = await stat(filePath);
+        if (!best || info.mtimeMs > best.mtimeMs) best = { path: filePath, name: entry.name, size: info.size, mtimeMs: info.mtimeMs };
+      }
+      return best;
+    } catch { return null; }
+  }
+  // 分发加速：最新 APK 自动同步到阿里云 OSS，/download/latest 302 到签名直链；
+  // OSS 不可用（未配置 / 上传失败 / 探测超时）时无感回退服务器带宽，老链接始终有效。
+  const oss = (() => {
+    try {
+      if (ossOption === null) return null;
+      const config = ossOption?.config !== undefined ? ossOption.config : resolveOssConfig(process.env);
+      return config ? new OssClient(config, { fetchImpl: ossOption?.fetchImpl ?? fetch, now: () => now().getTime() }) : null;
+    } catch (error) {
+      console.warn('[oss] 初始化失败，已禁用 OSS：', String(error?.message ?? error));
+      return null;
+    }
+  })();
+  const OSS_RECHECK_MS = 10 * 60 * 1000;
+  const OSS_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
+  const APK_MIME = 'application/vnd.android.package-archive';
+  const ossStates = new Map();
+  const ossStateFor = (path) => {
+    let state = ossStates.get(path);
+    if (!state) { state = { ready: false, verifiedAt: 0, cooldownUntil: 0, uploading: false }; ossStates.set(path, state); }
+    return state;
+  };
+  async function ossUploadApk(apk, state) {
+    if (state.uploading) return;
+    state.uploading = true;
+    const key = oss.objectKey(apk.name);
+    try {
+      await oss.upload(key, apk.path, { contentType: APK_MIME, fileName: apk.name });
+      const probe = await oss.probe(key);
+      if (!probe.ok || probe.size !== apk.size) throw new Error(`上传后核验未通过（${probe.ok ? `大小 ${probe.size}` : '无响应'}）`);
+      state.ready = true; state.verifiedAt = now().getTime(); state.cooldownUntil = 0;
+      console.log(`[oss] 已同步 ${apk.name}（${apk.size} 字节）→ ${key}`);
+    } catch (error) {
+      state.ready = false; state.cooldownUntil = now().getTime() + OSS_RETRY_COOLDOWN_MS;
+      console.warn('[oss] 同步失败，本次继续用服务器带宽：', String(error?.message ?? error));
+    } finally { state.uploading = false; }
+  }
+  async function ossEnsureUploaded(apk) {
+    if (!oss) return false;
+    const state = ossStateFor(apk.path);
+    if (state.ready) return true;
+    if (state.uploading) return false;
+    try {
+      const probe = await oss.probe(oss.objectKey(apk.name));
+      if (probe.ok && probe.size === apk.size) {
+        state.ready = true; state.verifiedAt = now().getTime();
+        return true;
+      }
+    } catch { /* 探测失败落回上传尝试（上传失败会进冷却） */ }
+    void ossUploadApk(apk, state);
+    return false;
+  }
+  async function ossUrlFor(apk, method) {
+    if (!oss) return null;
+    const state = ossStateFor(apk.path);
+    const stamp = now().getTime();
+    if (state.ready && stamp - state.verifiedAt < OSS_RECHECK_MS) return oss.signedUrl(oss.objectKey(apk.name), method);
+    if (stamp < state.cooldownUntil) return null;
+    try {
+      const probe = await oss.probe(oss.objectKey(apk.name));
+      if (probe.ok && probe.size === apk.size) {
+        state.ready = true; state.verifiedAt = stamp;
+        return oss.signedUrl(oss.objectKey(apk.name), method);
+      }
+      state.ready = false;
+      if (!state.uploading) void ossUploadApk(apk, state);
+      return null;
+    } catch (error) {
+      state.ready = false; state.cooldownUntil = stamp + OSS_RETRY_COOLDOWN_MS;
+      console.warn('[oss] 探测失败，回退服务器带宽：', String(error?.message ?? error));
+      return null;
+    }
+  }
   const tx = (fn) => transaction(db, fn);
   const authBuckets = new Map();
   let activeAuth = 0;
@@ -125,6 +329,9 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
     const hash = digest(header.slice(7));
     const found = db.prepare('SELECT user_id FROM sessions WHERE token_hash=? AND expires_at>?').get(hash, now().getTime());
     assert(found, 401, '登录已失效，请重新登录；本机待上传记录仍会保留');
+    // 滑动续期：活跃使用自动延长有效期，避免"每天在用却被固定到期踢下线"。
+    db.prepare('UPDATE sessions SET expires_at=? WHERE token_hash=? AND expires_at<?')
+      .run(now().getTime() + SESSION_MS, hash, now().getTime() + SESSION_MS - SESSION_RENEW_AFTER_MS);
     return { id: found.user_id, hash };
   }
   const stateRow = (id) => db.prepare('SELECT * FROM quest_state WHERE user_id=?').get(id);
@@ -146,7 +353,7 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
   }
   function snapshot(userId = null, { refreshDay = true } = {}) {
     const day = calendarDay(now());
-    if (!userId) return { profile: null, activeQuestId: null, recommendedQuestId: quests[0].id, replacedOn: null, draft: '', draftAttachments: [], day,
+    if (!userId) return { profile: null, activeQuestId: null, recommendedQuestId: firstEnabledId(), replacedOn: null, draft: '', draftAttachments: [], day,
       canRequestNext: false, progressRevision: 0, recommendationHistory: [], entryCount: 0 };
     if (refreshDay) syncDay(userId);
     const user = db.prepare('SELECT id,nickname,role,preferences FROM users WHERE id=?').get(userId), state = stateRow(userId);
@@ -326,6 +533,55 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
         response.writeHead(204, { ...(allowedOrigin ? { 'Access-Control-Allow-Origin': allowedOrigin, Vary: 'Origin' } : {}), 'Access-Control-Allow-Methods': 'GET,HEAD,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization,Content-Type,X-Sidequest-Protocol,Range', 'Access-Control-Max-Age': '600' }); response.end(); return;
       }
       if (request.method === 'GET' && pathname === '/api/health') { respond(response, 200, { ok: true, version: '0.2.0', protocolVersion: 2, mode: 'private-multimedia', timezone: 'Asia/Shanghai', mediaReady: true }, allowedOrigin); return; }
+      if (request.method === 'POST' && pathname === '/api/diagnostics') {
+        try { await recordDiagnostic(request, await readJson(request)); } catch { /* 静默：诊断永不影响客户端 */ }
+        response.writeHead(204, { ...(allowedOrigin ? { 'Access-Control-Allow-Origin': allowedOrigin, Vary: 'Origin' } : {}) }); response.end(); return;
+      }
+      if (request.method === 'POST' && pathname === '/internal/oss-warm') {
+        // 仅限本机（后台「版本分发」上传完成后调用）：把最新 APK 预热到 OSS。
+        // 注意：经 nginx 进来的请求 socket 也是 127.0.0.1，必须同时看 X-Real-IP
+        // （nginx 会覆写它；直连本机时不带该头）。
+        const remote = request.socket.remoteAddress ?? '';
+        const proxyIp = String(request.headers['x-real-ip'] ?? '').trim();
+        const local = (value) => ['127.0.0.1', '::1', '::ffff:127.0.0.1', ''].includes(value);
+        if (!local(remote) || !local(proxyIp)) { respond(response, 404, { error: '接口不存在' }, allowedOrigin); return; }
+        const apk = await latestApk();
+        if (!oss || !apk) { respond(response, 200, { ossReady: false }, allowedOrigin); return; }
+        void ossEnsureUploaded(apk);
+        respond(response, 202, { ossReady: true, apk: apk.name }, allowedOrigin); return;
+      }
+      if ((request.method === 'GET' || request.method === 'HEAD') && pathname === '/') {
+        response.writeHead(302, { Location: '/download', ...(allowedOrigin ? { 'Access-Control-Allow-Origin': allowedOrigin, Vary: 'Origin' } : {}) }); response.end(); return;
+      }
+      if ((request.method === 'GET' || request.method === 'HEAD') && (pathname === '/download' || pathname === '/download/')) {
+        if (request.method === 'GET') void recordDownloadEvent(request, 'page');
+        respondHtml(response, 200, downloadPage(await latestApk()), allowedOrigin); return;
+      }
+      if ((request.method === 'GET' || request.method === 'HEAD') && pathname === '/download/latest') {
+        const apk = await latestApk();
+        if (!apk) { respond(response, 404, { error: '暂时还没有可下载的版本' }, allowedOrigin); return; }
+        let ossUrl = null;
+        try { ossUrl = await ossUrlFor(apk, request.method === 'HEAD' ? 'HEAD' : 'GET'); }
+        catch (error) { console.warn('[oss] 下载跳转失败，回退服务器带宽：', String(error?.message ?? error)); }
+        if (request.method === 'GET') void recordDownloadEvent(request, 'apk', { via: ossUrl ? 'oss' : 'server', apk: apk.name });
+        if (ossUrl) {
+          response.writeHead(302, { Location: ossUrl, 'Cache-Control': 'no-store', ...(allowedOrigin ? { 'Access-Control-Allow-Origin': allowedOrigin, Vary: 'Origin' } : {}) });
+          response.end(); return;
+        }
+        response.writeHead(200, { 'Content-Type': 'application/vnd.android.package-archive', 'Content-Length': apk.size, 'Content-Disposition': `attachment; filename="sidequest.apk"; filename*=UTF-8''${encodeURIComponent(apk.name)}`, 'Cache-Control': 'no-store', ...(allowedOrigin ? { 'Access-Control-Allow-Origin': allowedOrigin, Vary: 'Origin' } : {}) });
+        createReadStream(apk.path).pipe(response); return;
+      }
+      if ((request.method === 'GET' || request.method === 'HEAD') && (pathname === '/privacy' || pathname === '/terms')) {
+        const doc = pathname === '/privacy'
+          ? { file: 'privacy.md', title: '支线 · 隐私政策' }
+          : { file: 'terms.md', title: '支线 · 用户条款' };
+        let html;
+        try {
+          const markdown = await readFile(join(serverDir, 'legal', doc.file), 'utf8');
+          html = pageShell(doc.title, `${renderMarkdown(markdown)}\n<p class="meta"><a href="/download">← 返回下载页</a></p>`);
+        } catch { html = pageShell(doc.title, '<h1>暂时打不开</h1><p>请稍后再试。</p>'); }
+        respondHtml(response, 200, html, allowedOrigin); return;
+      }
       assert(request.headers['x-sidequest-protocol'] === '2', 426, '客户端与服务版本不匹配，请升级至协议 2');
       assert(pathname === '/api/entries' || searchParams.size === 0, 400, '此接口不接受查询参数');
       if (request.method === 'GET' && pathname === '/api/state') { respond(response, 200, { state: snapshot(authenticate(request, true)?.id) }, allowedOrigin); return; }
@@ -418,7 +674,7 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const host = process.env.HOST || '127.0.0.1', port = Number(process.env.PORT || 8787);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be 1–65535');
-  const app = createApp({ databasePath: process.env.DATABASE_PATH || './data/sidequest-v2.sqlite', mediaDirectory: process.env.MEDIA_DIRECTORY,
+  const app = createApp({ databasePath: process.env.DATABASE_PATH || './data/sidequest-v2.sqlite', mediaDirectory: process.env.MEDIA_DIRECTORY, apkDirectory: process.env.APK_DIRECTORY,
     allowedOrigins: (process.env.ALLOWED_ORIGINS || '').split(',').map((item) => item.trim()).filter(Boolean) });
   app.server.listen(port, host, () => console.log(`Sidequest v0.2 API listening on ${host}:${port}; protocol 2; private media enabled. Local integration only, not a production deployment.`));
   let closing = false;

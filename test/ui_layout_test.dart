@@ -194,7 +194,7 @@ void main() {
       await _openProfile(tester);
       expectNoExtraScroll(const Key('profile-scroll'), tester);
       expect(find.byKey(const Key('profile-login-action')), findsNothing);
-      expect(find.text('上传与同步'), findsOneWidget);
+      expect(find.text('同步'), findsOneWidget);
       expect(find.text('退出登录'), findsOneWidget);
       expect(find.text('删除账号与全部记录'), findsOneWidget);
       expectNoLayoutException(tester);
@@ -463,7 +463,7 @@ void main() {
       await tester.pumpAndSettle();
       await revealAndExpectVisible(
         tester,
-        find.text('请先确认已了解测试版账号和隐私说明。'),
+        find.text('请先确认隐私说明。'),
         keyboardInset: 300,
         scrollableKey: const Key('auth-scroll'),
       );

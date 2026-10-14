@@ -14,6 +14,7 @@ import 'package:uuid/uuid.dart';
 import 'domain.dart';
 import 'media_normalizer.dart';
 import 'offline_store.dart';
+import 'silent_reporter.dart';
 import 'sync_schedule.dart';
 
 const _uuid = Uuid();
@@ -22,6 +23,9 @@ abstract class QuestRepository {
   bool get isRemote;
   bool get isConfigured => true;
   String get cacheScope;
+
+  /// 把错误细节静默送到后台（用户无感知）；本地/配置仓储为空实现。
+  void reportProblem(Object error, String scope);
   Future<AppSnapshot> load();
   Future<AppSnapshot> savePreferences(String role, List<String> preferences);
   Future<AppSnapshot> register(String nickname, String password);
@@ -97,7 +101,9 @@ QuestRepository createRepository({String apiBaseUrl = ''}) =>
 
 class ConfigurationRepository implements QuestRepository {
   const ConfigurationRepository();
-  static const _error = QuestException('未配置服务地址，请先设置 API_BASE_URL。');
+  static const _error = QuestException('暂时无法连接服务，请更新应用后再试。');
+  @override
+  void reportProblem(Object error, String scope) {}
   Future<T> _future<T>() => Future<T>.error(_error);
   Never _fail() => throw _error;
   @override
@@ -235,20 +241,39 @@ Map<String, dynamic> _map(Object? value) =>
     Map<String, dynamic>.from(value as Map);
 
 abstract class SessionTokenStore {
+  /// 读取令牌；读不到（含存储损坏等异常）时返回 null，绝不抛出。
   Future<String?> read();
   Future<void> write(String token);
   Future<void> clear();
 }
 
 class PlatformSessionTokenStore implements SessionTokenStore {
-  const PlatformSessionTokenStore({this.scope = 'default'});
+  PlatformSessionTokenStore({this.scope = 'default', FlutterSecureStorage? secure})
+    : _secure = secure ?? const FlutterSecureStorage();
   final String scope;
-  static const _secure = FlutterSecureStorage();
+  final FlutterSecureStorage _secure;
+
+  /// 读取失败（例如设备密钥失效导致无法解密）时回调一次，便于静默上报。
+  void Function(Object error)? onCorruption;
   String get _key => 'sidequest.remote.token.$scope';
   @override
-  Future<String?> read() async => kIsWeb
-      ? (await SharedPreferences.getInstance()).getString(_key)
-      : _secure.read(key: _key);
+  Future<String?> read() async {
+    if (kIsWeb) {
+      return (await SharedPreferences.getInstance()).getString(_key);
+    }
+    try {
+      return await _secure.read(key: _key);
+    } catch (error) {
+      // 存储损坏（无法解密）：按未登录处理并清掉坏数据，重新登录即可恢复。
+      onCorruption?.call(error);
+      try {
+        await _secure.delete(key: _key);
+      } catch (_) {
+        // 清不掉也不影响本次降级。
+      }
+      return null;
+    }
+  }
   @override
   Future<void> write(String token) async {
     if (kIsWeb) {
@@ -260,7 +285,11 @@ class PlatformSessionTokenStore implements SessionTokenStore {
       }
       return;
     }
-    await _secure.write(key: _key, value: token);
+    try {
+      await _secure.write(key: _key, value: token);
+    } catch (_) {
+      throw const QuestException('无法保存登录状态。');
+    }
   }
 
   @override
@@ -271,7 +300,11 @@ class PlatformSessionTokenStore implements SessionTokenStore {
       }
       return;
     }
-    await _secure.delete(key: _key);
+    try {
+      await _secure.delete(key: _key);
+    } catch (_) {
+      throw const QuestException('无法清除登录状态。');
+    }
   }
 }
 
@@ -339,6 +372,10 @@ class RemoteQuestRepository implements QuestRepository {
            PlatformSessionTokenStore(scope: _scopeFor(apiBaseUrl)),
        _offline =
            offlineStore ?? OfflineStore(namespace: _normalizeBase(apiBaseUrl)) {
+    final tokens = _tokens;
+    if (tokens is PlatformSessionTokenStore) {
+      tokens.onCorruption = (error) => reportProblem(error, 'token.read');
+    }
     final uri = Uri.parse(_base);
     if (uri.scheme != 'https' &&
         !(uri.scheme == 'http' &&
@@ -372,6 +409,42 @@ class RemoteQuestRepository implements QuestRepository {
   final String _base;
   final http.Client _client;
   final bool _ownsClient;
+  SilentReporter? _silentReporter;
+
+  /// 是否允许静默上报：只在真实运行且使用内置网络客户端时开启；
+  /// 测试（flutter test / 注入的客户端）一律关闭。
+  bool get _reportingEnabled {
+    if (!_ownsClient) return false;
+    try {
+      return Platform.environment['FLUTTER_TEST'] != 'true';
+    } on UnsupportedError {
+      return false;
+    }
+  }
+
+  /// 把错误细节静默送到后台（用户无感知）。界面文案请用 voice.userMessageFor。
+  @override
+  void reportProblem(Object error, String scope) {
+    if (!_reportingEnabled) return;
+    (_silentReporter ??= SilentReporter(_sendDiagnostic))
+        .report(error, scope, client: Platform.operatingSystem);
+  }
+
+  Future<void> _sendDiagnostic(Map<String, Object?> payload) async {
+    String? token;
+    try {
+      token = await _tokens.read();
+    } catch (_) {
+      // 读不到令牌也要尽量送达：诊断走匿名通道，不取决于登录状态。
+    }
+    await _client
+        .post(
+          Uri.parse('$_base/api/diagnostics'),
+          headers: _headers(token: token),
+          body: jsonEncode(payload),
+        )
+        .timeout(const Duration(seconds: 8));
+  }
   final SessionTokenStore _tokens;
   final OfflineStore _offline;
   SharedPreferences? _prefs;
@@ -499,23 +572,27 @@ class RemoteQuestRepository implements QuestRepository {
       response = await _client
           .get(Uri.parse('$_base/api/health'))
           .timeout(const Duration(seconds: 20));
-    } on TimeoutException {
+    } on TimeoutException catch (error) {
+      reportProblem(error, 'health');
       throw const QuestException('连接超时，请稍后重试。');
-    } on http.ClientException {
+    } on http.ClientException catch (error) {
+      reportProblem(error, 'health');
       throw const QuestException('暂时连接不到服务。');
-    } on SocketException {
+    } on SocketException catch (error) {
+      reportProblem(error, 'health');
       throw const QuestException('暂时连接不到服务。');
     }
     Map<String, dynamic> data;
     try {
       data = _map(jsonDecode(utf8.decode(response.bodyBytes)));
-    } catch (_) {
-      throw const QuestException('服务版本无法识别，需要协议 2。');
+    } catch (error) {
+      reportProblem(error, 'health:probe');
+      throw const QuestException('暂时无法连接，请更新应用后再试。');
     }
     if (response.statusCode < 200 ||
         response.statusCode >= 300 ||
         data['protocolVersion'] != 2) {
-      throw const QuestException('服务版本不匹配，需要协议 2。');
+      throw const QuestException('暂时无法连接，请更新应用后再试。');
     }
   }
 
@@ -573,17 +650,20 @@ class RemoteQuestRepository implements QuestRepository {
               .get(uri, headers: _headers(token: token))
               .timeout(timeout),
       };
-    } on TimeoutException {
+    } on TimeoutException catch (error) {
+      reportProblem(error, 'request:$endpoint');
       if (uncertainWrite) {
         throw const _UncertainNetworkException('连接超时，将先确认服务是否已收到。');
       }
       throw const QuestException('连接超时，本机内容已保留，请稍后重试。');
-    } on http.ClientException {
+    } on http.ClientException catch (error) {
+      reportProblem(error, 'request:$endpoint');
       if (uncertainWrite) {
         throw const _UncertainNetworkException('同步连接中断，将先确认服务是否已收到。');
       }
       throw const QuestException('暂时连接不到服务，本机内容已保留。');
-    } on SocketException {
+    } on SocketException catch (error) {
+      reportProblem(error, 'request:$endpoint');
       if (uncertainWrite) {
         throw const _UncertainNetworkException('同步连接中断，将先确认服务是否已收到。');
       }
@@ -593,7 +673,8 @@ class RemoteQuestRepository implements QuestRepository {
     Map<String, dynamic> data;
     try {
       data = _map(jsonDecode(utf8.decode(response.bodyBytes)));
-    } catch (_) {
+    } catch (error) {
+      reportProblem(error, 'request:$endpoint:decode');
       if (uncertainWrite &&
           response.statusCode >= 200 &&
           response.statusCode < 300) {
@@ -602,10 +683,14 @@ class RemoteQuestRepository implements QuestRepository {
       throw const QuestException('服务返回了无法识别的数据，请稍后重试。');
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw _ApiException(
+      final failure = _ApiException(
         data['error'] is String ? data['error'] as String : '请求未成功，请稍后重试。',
         response.statusCode,
       );
+      if (response.statusCode >= 500) {
+        reportProblem(failure, 'request:$endpoint:${response.statusCode}');
+      }
+      throw failure;
     }
     return data;
   }
@@ -635,18 +720,24 @@ class RemoteQuestRepository implements QuestRepository {
       })().timeout(const Duration(minutes: 2));
       await guard();
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        var message = '附件上传失败，请稍后重试。';
+        var message = '附件同步失败，请稍后重试。';
         try {
           final decoded = _map(jsonDecode(utf8.decode(response.bodyBytes)));
           if (decoded['error'] is String) message = decoded['error'] as String;
         } catch (_) {}
-        throw _ApiException(message, response.statusCode);
+        final failure = _ApiException(message, response.statusCode);
+        if (response.statusCode >= 500) {
+          reportProblem(failure, 'upload:${response.statusCode}');
+        }
+        throw failure;
       }
       return response;
-    } on TimeoutException {
-      throw const QuestException('附件上传超时，本机文件仍已保留。');
-    } on http.ClientException {
-      throw const QuestException('附件上传中断，本机文件仍已保留。');
+    } on TimeoutException catch (error) {
+      reportProblem(error, 'upload');
+      throw const QuestException('附件同步超时，本机文件仍已保留。');
+    } on http.ClientException catch (error) {
+      reportProblem(error, 'upload');
+      throw const QuestException('附件同步中断，本机文件仍已保留。');
     }
   }
 
@@ -675,7 +766,7 @@ class RemoteQuestRepository implements QuestRepository {
       throw const QuestException('账号已变更，请重试。');
     }
     if (await _offline.pendingCommandCount(account.id) != 0) {
-      throw const QuestException('请先完成待上传内容；移动网络需先选择“立即上传”。');
+      throw const QuestException('请先完成待同步内容；移动网络下需要先在“同步”里手动同步。');
     }
     return account;
   }
@@ -1431,7 +1522,7 @@ class RemoteQuestRepository implements QuestRepository {
         entryId,
       );
       if (affected.isEmpty) {
-        throw const QuestException('这条记录没有可移除的待上传附件。');
+        throw const QuestException('这条记录没有可移除的待同步附件。');
       }
       final missing = <String>{};
       final persisted = affected
@@ -1489,7 +1580,7 @@ class RemoteQuestRepository implements QuestRepository {
         leaseOwner: _sessionLeaseOwner,
       );
       await _cleanupQueue();
-      await _emitSummary('已移除失败附件，将只上传文字。');
+      await _emitSummary('已移除失败附件，将只同步文字。');
     });
     await syncNow();
   });
@@ -1573,7 +1664,7 @@ class RemoteQuestRepository implements QuestRepository {
 
   Future<void> _requireNetworkForBatch(bool meteredAuthorized) async {
     if (!meteredAuthorized && !await _wifiCheck()) {
-      throw const QuestException('已离开 Wi-Fi，本次上传已暂停。');
+      throw const QuestException('离开无线网了，同步先暂停。');
     }
   }
 
@@ -1644,14 +1735,14 @@ class RemoteQuestRepository implements QuestRepository {
       await guard();
       final path = current.localPath;
       if (path == null || !await File(path).exists()) {
-        const message = '附件源文件缺失，无法继续上传。';
+        const message = '附件源文件缺失，无法继续同步。';
         await _offline.updateMedia(
           clientId: current.clientId,
           state: 'failed',
           error: message,
         );
         await _emitSummary(message);
-        throw const QuestException('附件源文件缺失，无法继续上传。');
+        throw const QuestException('附件源文件缺失，无法继续同步。');
       }
       await _offline.updateMedia(
         clientId: current.clientId,
@@ -1955,7 +2046,7 @@ class RemoteQuestRepository implements QuestRepository {
       if (initialCloud.profile?.id != account.snapshot.profile?.id) {
         await _tokens.clear();
         await _offline.markRequiresLogin(account.id, true);
-        await _emitSummary('登录账号与本机队列不匹配，请重新登录。');
+        await _emitSummary('登录账号与本机待同步内容不匹配，请重新登录。');
         return;
       }
       await guard();

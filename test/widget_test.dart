@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sidequest/domain.dart';
 import 'package:sidequest/pages.dart';
 
 import 'ui_test_harness.dart';
@@ -70,7 +71,7 @@ void main() {
         tester,
         find.byKey(const Key('record-complete-action')),
       );
-      expect(find.text('已存到本机，等待上传'), findsOneWidget);
+      expect(find.text('已记下，等待同步'), findsOneWidget);
       final state = await repository.load();
       expect(state.profile!.nickname, '小叶子');
       expect(state.entries.single.text, '窗边的叶子是柔和的绿色。');
@@ -105,6 +106,28 @@ void main() {
     expectNoLayoutException(tester);
     await revealAndTap(tester, find.byKey(const Key('quest-primary-action')));
     expect(find.byType(LoginPage), findsOneWidget);
+    expectNoLayoutException(tester);
+  });
+  testWidgets('登录过期时同步入口主动提示并可一键重新登录', (tester) async {
+    configureTestView(tester, size: const Size(390, 844));
+    final repository = await createLocalFixture(
+      onboarded: true,
+      preferences: const [],
+    );
+    await repository.savePreferences('student', const []);
+    await repository.register('小叶子', 'testing-password');
+    repository.summaryOverride = const SyncSummary(
+      requiresLogin: true,
+      message: '登录已失效，本机待同步内容仍已保留。',
+    );
+    await pumpSideQuest(tester, repository);
+    await tester.tap(find.text('我的'));
+    await tester.pumpAndSettle();
+    expect(find.text('登录已过期 · 点这里重新登录'), findsOneWidget);
+    await tester.tap(find.text('登录已过期 · 点这里重新登录'));
+    await tester.pumpAndSettle();
+    expect(find.text('登录过期了，内容都还在。登录原账号后继续同步。'), findsOneWidget);
+    expect(find.byKey(const Key('sync-login-action')), findsOneWidget);
     expectNoLayoutException(tester);
   });
 }

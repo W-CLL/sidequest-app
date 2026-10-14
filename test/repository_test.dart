@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
@@ -20,6 +22,57 @@ class MemoryTokens implements SessionTokenStore {
   Future<void> write(String value) async => token = value;
   @override
   Future<void> clear() async => token = null;
+}
+
+/// 模拟设备密钥失效导致的解密失败（真实设备上的 BadPaddingException 一类）。
+class _BrokenSecureStorage extends FlutterSecureStorage {
+  _BrokenSecureStorage({this.failRead = true, this.failWrite = false});
+  final bool failRead, failWrite;
+  var deletes = 0;
+  @override
+  Future<String?> read({
+    required String key,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    if (failRead) {
+      throw PlatformException(code: 'read', message: 'BAD_DECRYPT');
+    }
+    return 'ok';
+  }
+
+  @override
+  Future<void> write({
+    required String key,
+    required String? value,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    if (failWrite) {
+      throw PlatformException(code: 'write', message: 'KEYSTORE_LOST');
+    }
+  }
+
+  @override
+  Future<void> delete({
+    required String key,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    deletes += 1;
+  }
 }
 
 class _Call {
@@ -579,4 +632,18 @@ void main() {
       expect(api.entries.values.single.attachments, isEmpty);
     },
   );
+  test('令牌存储损坏时自愈：按未登录处理、清掉坏数据并回调上报', () async {
+    final broken = _BrokenSecureStorage();
+    Object? reported;
+    final store = PlatformSessionTokenStore(scope: 'heal-test', secure: broken)
+      ..onCorruption = (error) => reported = error;
+    expect(await store.read(), isNull);
+    expect(broken.deletes, 1);
+    expect(reported, isA<PlatformException>());
+  });
+  test('令牌写入失败映射为温和文案', () async {
+    final broken = _BrokenSecureStorage(failRead: false, failWrite: true);
+    final store = PlatformSessionTokenStore(scope: 'heal-test', secure: broken);
+    await expectLater(store.write('token-value'), throwsA(isA<QuestException>()));
+  });
 }

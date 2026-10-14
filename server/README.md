@@ -22,6 +22,8 @@ node server.mjs
 | `MEDIA_DIRECTORY` | 数据库目录下的 `media` | 私有持久媒体目录，不是公共静态目录 |
 | `FFMPEG_PATH` / `FFPROBE_PATH` | `ffmpeg` / `ffprobe` | 媒体处理工具路径 |
 | `ALLOWED_ORIGINS` | 空 | 精确浏览器来源白名单，逗号分隔；原生客户端不需要 Origin |
+| `APK_DIRECTORY` | 数据库目录下的 `apk` | 分发 APK 目录；`/download/latest` 始终投递这里最新的 `.apk` |
+| `OSS_*` | 未设置（禁用） | 可选分发加速：`OSS_REGION`/`OSS_ENDPOINT`/`OSS_BUCKET`/`OSS_ACCESS_KEY_ID`/`OSS_ACCESS_KEY_SECRET`/`OSS_PREFIX`/`OSS_URL_EXPIRES`/`OSS_DOWNLOAD_DOMAIN`；未配置或失败时下载无感回退服务器带宽 |
 
 只初始化空数据库或打开明确标记为 v2 的数据库。检测到旧版或未标记的已有数据库时，在只读检查后拒绝启动，提示使用新路径；不迁移、覆盖或删除旧库。旧客户端的本机数据也不会上传或删除。
 
@@ -30,6 +32,19 @@ node server.mjs
 媒体目录的 `.sidequest-media-owner` 与数据库绑定，不能让两个数据库复用同一媒体目录；非空但没有归属标记的目录会被拒绝，现有文件保持不变。清理器仅处理数据库明确登记的附件，不猜测或删除未知子目录。
 
 Android 模拟器和 USB 真机均可使用 `adb reverse tcp:8787 tcp:8787` 后连接 `http://127.0.0.1:8787`。当前 debug 包只为环回地址放行 HTTP，不直接放行模拟器的 `10.0.2.2`。明文地址只用于本地开发测试。客户端需配置 `API_BASE_URL`，不能将 GitHub 仓库当作后端服务。
+
+## 下载页与法律文档（分发）
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `GET /` | 302 跳转到下载页 |
+| `GET /download` | 手机友好的下载落地页（自动指向最新的 APK） |
+| `GET /download/latest` | 最新 APK 的稳定链接：配置 OSS 后 302 到签名直链（15 分钟有效），未配置/失败自动回退本地流式投递（按文件修改时间取最新的 `.apk`） |
+| `GET /privacy` / `GET /terms` | 读取 `server/legal/*.md` 渲染的隐私政策 / 用户条款 |
+
+- 每次重新构建后把新 APK 放进 `APK_DIRECTORY`（建议命名如 `sidequest-0.2.0.apk`），下载链接始终是最新版本，旧文件可以删掉。
+- 这几类页面不需要协议头、不要求登录、不占用数据库，浏览器直接打开即可（HTTP 即可，应用内连接仍要求 HTTPS）。
+- 更新法律文案：直接编辑 `server/legal/privacy.md` / `server/legal/terms.md`，刷新页面即生效（支持 `#`、`##`、`-` 列表、`**加粗**` 子集）。
 
 ## 协议与同步
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'domain.dart';
 import 'repository.dart';
+import 'voice.dart';
 
 export 'record_pages.dart';
 
@@ -12,8 +13,7 @@ const _lime = Color(0xFFDFECAC);
 const _pale = Color(0xFFEEF1E6);
 const _muted = Color(0xFF69756C);
 
-String _errorText(Object error) =>
-    error is QuestException ? error.message : '这次没有保存成功，请稍后重试。内容仍保留在当前页面。';
+String _errorText(Object error) => userMessageFor(error);
 
 class LoginPage extends StatefulWidget {
   const LoginPage({
@@ -66,7 +66,7 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
     if (_register && !_accepted) {
-      setState(() => _error = '请先确认已了解测试版账号和隐私说明。');
+      setState(() => _error = '请先确认隐私说明。');
       return;
     }
     setState(() {
@@ -193,7 +193,7 @@ class _LoginPageState extends State<LoginPage> {
           const Padding(
             padding: EdgeInsets.fromLTRB(12, 6, 12, 0),
             child: Text(
-              '8–128 个字符，请使用独立的测试密码。',
+              '8–128 个字符；建议不要与别处共用密码。',
               key: Key('auth-password-requirements'),
               style: TextStyle(fontSize: 12, color: _muted, height: 1.5),
             ),
@@ -209,15 +209,15 @@ class _LoginPageState extends State<LoginPage> {
                   ? null
                   : (value) => setState(() => _accepted = value ?? false),
               title: const Text(
-                '我已了解保存方式、隐私说明与无法找回密码的限制。',
+                '我已了解记录的保存方式与隐私说明。',
                 style: TextStyle(fontSize: 13, height: 1.5),
               ),
             ),
           ],
           _Panel(
             icon: Icons.info_outline_rounded,
-            title: '联网账号 · 本机暂存',
-            text: '账号需联网创建。待上传内容先存本机，Wi-Fi 下自动上传到私人账号。',
+            title: '先记下，再同步',
+            text: '创建账号需要网络；已经记下的内容会留在手机里，稍后自动同步。',
           ),
           SizedBox(
             width: double.infinity,
@@ -236,7 +236,7 @@ class _LoginPageState extends State<LoginPage> {
                       PrivacyPage(remote: widget.repository.isRemote),
                 ),
               ),
-              child: const Text('查看隐私与测试版说明'),
+              child: const Text('查看隐私说明'),
             ),
           ),
           if (_error != null) ...[
@@ -396,7 +396,7 @@ class VersionPage extends StatelessWidget {
             const _LeafMark(),
             const SizedBox(height: 20),
             const Text(
-              '0.2.0 · 日常探索测试版',
+              '0.2.0 · 每天一条支线',
               style: TextStyle(
                 fontSize: 25,
                 fontWeight: FontWeight.w700,
@@ -405,23 +405,19 @@ class VersionPage extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             const Text(
-              '偏好推荐、多媒体记录和私密回看。',
+              '每天一条小支线，记下发现，随时回看。',
               style: TextStyle(color: _muted, height: 1.7),
             ),
             const SizedBox(height: 20),
             const _Section(
-              '当前可用',
-              '40 项活动会参考探索偏好推荐。记录支持 1–500 个 Unicode 字符、最多 5 张图片、1 段 15 秒视频和 1 段 60 秒语音。支持搜索、联网编辑和自行选择图片分享。',
+              '可以做什么',
+              '40 条小支线，会参考你的偏好来推荐。记录能写文字、放图片、视频和语音，也能搜索和编辑。',
             ),
-            const _Section('暂未开放', '定时提醒和密码找回尚未开放；不提供 JSON 导入导出、公共动态或社交互动。'),
             _Section(
-              '保存边界',
-              '文字与媒体先保存在本机，Wi-Fi 下自动上传，也可为当前队列允许立即上传。最多暂存 20 条待上传记录、500 MiB；账号媒体容量 1 GiB。卸载前请确认上传完成。',
+              '保存方式',
+              '内容先存在手机里，稍后自动同步；卸载前请确认同步完成。',
             ),
-            const _Section(
-              '测试版限制',
-              '当前使用规则推荐，不是 AI 生成。联网服务并非端到端加密，测试版尚不构成生产安全或可靠备份承诺；请勿保存敏感或不可替代的信息。',
-            ),
+            const _Section('请留意', '不要用它保存证件、密码这类敏感资料。'),
             OutlinedButton.icon(
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
@@ -473,37 +469,33 @@ class PrivacyPage extends StatelessWidget {
             const SizedBox(height: 16),
             _Panel(
               icon: Icons.info_outline_rounded,
-              title: '联网账号与本机待上传内容',
-              text: '账号、文字与媒体会发送到已配置的服务。未上传的草稿和记录先保存在本机；请在上传完成前保留应用数据。',
+              title: '账号与内容',
+              text: '账号和记录会同步到服务；还没同步的内容先留在手机里，同步完成前请保留应用数据。',
             ),
             const SizedBox(height: 28),
             const _Section(
-              '只收集完成体验所需的信息',
-              '使用昵称和密码，不收集手机号。身份必选，探索偏好可跳过，并可后续修改；身份仅帮助选择合适场景，不代表年龄验证，也不会提高内容难度。暂不支持密码找回。',
+              '只用昵称和密码',
+              '不收集手机号。身份只用来选择合适场景，不代表年龄验证，随时可以修改。',
             ),
             _Section(
-              '数据存放与安全边界',
-              '私人记录和媒体访问需要账号鉴权。登录令牌保存在平台安全存储中，本机数据库和媒体不是端到端加密保险箱。卸载或清除数据会丢失尚未上传的内容。不要记录密码、证件、健康等敏感资料。',
+              '数据与安全',
+              '记录和媒体的查看需要账号验证；卸载或清除数据会丢失还没同步的内容。请勿保存证件、密码等敏感资料。',
             ),
             const _Section(
               '不追踪位置，不索取无关权限',
-              '不请求定位，不记录行动轨迹。仅在你选择图库或开始录音时使用所需系统权限；没有拍摄入口或定时通知。媒体经服务端校验与处理后保存，不能承诺清除画面或声音中本身包含的隐私。',
+              '不请求定位，不记录行动轨迹。相册和录音只在你使用时询问；没有拍摄入口，也没有定时通知。',
             ),
             const _Section(
-              '默认私密，分享由你决定',
-              '没有公开信息流，不自动公开完成记录。生成图片卡片前会要求确认，卡片不包含昵称和身份，但你写下的内容仍可能包含隐私。系统分享产生的文件或接收方副本，无法由本应用自动撤回。',
+              '只有你能看到，分享由你决定',
+              '没有公开信息流，记录不会自动公开。生成分享卡前会请你确认，卡片不包含昵称和身份；分享出去的文件需要你自行保管。',
             ),
             const _Section(
               '删除与分享',
-              '分享卡默认只有文字，你可主动选择最多 5 张图片；语音和视频不会加入。可删除单条记录，或验证密码后删除账号。删除不可撤销；已分享副本无法收回。当前不提供 JSON 导入导出。',
+              '可删除单条记录，或验证密码后删除账号，删除不可撤销。分享卡默认只有文字，最多可选 5 张图片；语音和视频不会加入。',
             ),
             const _Section(
               '不以压力换取完成',
-              '所有探索都应轻量、低风险，不强制消费、社交或运动。每天可以更换一次；这与“先放一放”不同。任何时候不合适，都可以先放一放。没有强制连续签到，也没有本版惩罚。',
-            ),
-            const _Section(
-              '测试版不是生产服务承诺',
-              '本版用于验证流程和感受，未上架，不代表服务完成生产安全或合规审查。通知与账号恢复尚未提供。请勿保存不可替代的资料。',
+              '所有探索都轻量、低风险，不强制消费、社交或运动。每天可以更换一次；任何时候不合适，都可以先放一放。没有连续签到，也没有惩罚。',
             ),
           ],
         ),

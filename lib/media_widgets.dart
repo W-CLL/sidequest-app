@@ -23,10 +23,10 @@ String mediaLabel(MediaKind kind) => switch (kind) {
 
 String syncStatusLabel(String status) => switch (status) {
   'saved' => '已保存',
-  'uploading' => '上传中',
+  'uploading' => '同步中',
   'processing' => '处理附件',
-  'failed' => '上传失败，内容仍在本机',
-  _ => '已存本机 · 等待上传',
+  'failed' => '同步失败，内容仍在本机',
+  _ => '已存本机 · 等待同步',
 };
 
 /// Fetch bytes with fresh account headers instead of sharing a URL-only image
@@ -157,11 +157,11 @@ class AttachmentList extends StatelessWidget {
                   clipBehavior: Clip.antiAlias,
                   child: InkWell(
                     key: ValueKey('media-open-${media.id}'),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) =>
-                            MediaViewer(media: media, repository: repository),
-                      ),
+                    onTap: () => showMediaViewer(
+                      context,
+                      attachments: attachments,
+                      initialIndex: attachments.indexOf(media),
+                      repository: repository,
                     ),
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(
@@ -591,18 +591,17 @@ class _MediaComposerState extends State<MediaComposer>
             Text('已暂存 ${(pending.duration / 1000).ceil()} 秒，确认后才加入记录。'),
             TextButton.icon(
               key: const Key('audio-review-play'),
-              onPressed: () => Navigator.of(dialogContext).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => MediaViewer(
-                    repository: widget.repository,
-                    media: MediaAttachment(
-                      id: 'audio-preview',
-                      kind: MediaKind.audio,
-                      localPath: pending.path,
-                      durationMs: pending.duration,
-                    ),
+              onPressed: () => showMediaViewer(
+                dialogContext,
+                attachments: [
+                  MediaAttachment(
+                    id: 'audio-preview',
+                    kind: MediaKind.audio,
+                    localPath: pending.path,
+                    durationMs: pending.duration,
                   ),
-                ),
+                ],
+                repository: widget.repository,
               ),
               icon: const Icon(Icons.play_circle_outline),
               label: const Text('试听'),
@@ -758,8 +757,151 @@ class _MediaComposerState extends State<MediaComposer>
   }
 }
 
+const _viewerSurface = Color(0xFF141B17);
+const _viewerText = Color(0xFFE9EFE4);
+const _viewerMuted = Color(0xFF97A39A);
+const _viewerAccent = Color(0xFFDFECAC);
+
+/// 以弹窗形式查看与播放媒体：左右滑动可切换同一记录中的其他附件。
+Future<void> showMediaViewer(
+  BuildContext context, {
+  required List<MediaAttachment> attachments,
+  int initialIndex = 0,
+  required QuestRepository repository,
+}) => showGeneralDialog<void>(
+  context: context,
+  barrierDismissible: true,
+  barrierLabel: '查看媒体',
+  barrierColor: const Color(0xCC0A0F0C),
+  transitionDuration: const Duration(milliseconds: 180),
+  pageBuilder: (dialogContext, animation, secondaryAnimation) => SafeArea(
+    child: Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 560,
+          maxHeight: MediaQuery.sizeOf(dialogContext).height * 0.78,
+        ),
+        child: _MediaGallery(
+          attachments: attachments,
+          initialIndex: initialIndex,
+          repository: repository,
+          onClose: () => Navigator.of(dialogContext).pop(),
+        ),
+      ),
+    ),
+  ),
+  transitionBuilder: (context, animation, secondaryAnimation, child) =>
+      FadeTransition(
+        opacity: animation,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.94, end: 1).animate(
+            CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+          ),
+          child: child,
+        ),
+      ),
+);
+
+class _MediaGallery extends StatefulWidget {
+  const _MediaGallery({
+    required this.attachments,
+    required this.initialIndex,
+    required this.repository,
+    required this.onClose,
+  });
+  final List<MediaAttachment> attachments;
+  final int initialIndex;
+  final QuestRepository repository;
+  final VoidCallback onClose;
+  @override
+  State<_MediaGallery> createState() => _MediaGalleryState();
+}
+
+class _MediaGalleryState extends State<_MediaGallery> {
+  late final PageController _controller;
+  late int _index;
+
+  @override
+  void initState() {
+    super.initState();
+    _index = widget.initialIndex.clamp(0, widget.attachments.length - 1);
+    _controller = PageController(initialPage: _index);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total = widget.attachments.length;
+    final media = widget.attachments[_index];
+    return Material(
+      color: _viewerSurface,
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 8, 6, 0),
+            child: Row(
+              children: [
+                Text(
+                  total > 1
+                      ? '${mediaLabel(media.kind)} · ${_index + 1} / $total'
+                      : mediaLabel(media.kind),
+                  style: const TextStyle(
+                    color: _viewerText,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                if (total > 1)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 2),
+                    child: Icon(
+                      Icons.swipe_outlined,
+                      color: _viewerMuted,
+                      size: 18,
+                    ),
+                  ),
+                IconButton(
+                  key: const Key('media-viewer-close'),
+                  onPressed: widget.onClose,
+                  tooltip: '关闭',
+                  icon: const Icon(Icons.close, color: _viewerMuted),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: PageView.builder(
+              controller: _controller,
+              itemCount: total,
+              onPageChanged: (value) => setState(() => _index = value),
+              itemBuilder: (context, index) => MediaViewer(
+                media: widget.attachments[index],
+                repository: widget.repository,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class MediaViewer extends StatefulWidget {
-  const MediaViewer({super.key, required this.media, required this.repository});
+  const MediaViewer({
+    super.key,
+    required this.media,
+    required this.repository,
+  });
   final MediaAttachment media;
   final QuestRepository repository;
   @override
@@ -882,75 +1024,111 @@ class _MediaViewerState extends State<MediaViewer> with WidgetsBindingObserver {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(mediaLabel(widget.media.kind))),
-    body: SafeArea(
-      child: Center(
+  Widget build(BuildContext context) {
+    if (widget.media.kind == MediaKind.image) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 14),
+        child: InteractiveViewer(
+          maxScale: 6,
+          child: Center(
+            child: PrivateMediaImage(
+              media: widget.media,
+              repository: widget.repository,
+              thumbnail: false,
+              fit: BoxFit.contain,
+            ),
+          ),
+        ),
+      );
+    }
+    if (_error != null) {
+      return Center(
         child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: widget.media.kind == MediaKind.image
-              ? InteractiveViewer(
-                  child: PrivateMediaImage(
-                    media: widget.media,
-                    repository: widget.repository,
-                    thumbnail: false,
-                    fit: BoxFit.contain,
-                  ),
-                )
-              : _error != null
-              ? Text(_error!)
-              : !_ready
-              ? const CircularProgressIndicator()
-              : _video != null
-              ? Column(
-                  mainAxisSize: MainAxisSize.max,
-                  children: [
-                    Expanded(
-                      child: Center(
-                        child: AspectRatio(
-                          aspectRatio: _video!.value.aspectRatio,
-                          child: VideoPlayer(_video!),
-                        ),
-                      ),
-                    ),
-                    VideoProgressIndicator(_video!, allowScrubbing: true),
-                    IconButton(
-                      key: const Key('media-video-toggle'),
-                      onPressed: _toggleVideo,
-                      icon: Icon(
-                        _video!.value.isPlaying
-                            ? Icons.pause
-                            : Icons.play_arrow,
-                      ),
-                      tooltip: '播放 / 暂停',
-                    ),
-                  ],
-                )
-              : StreamBuilder<PlayerState>(
-                  stream: _audio!.playerStateStream,
-                  builder: (context, snapshot) => Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.graphic_eq, size: 56),
-                      const SizedBox(height: 12),
-                      Text(
-                        '语音 · ${((widget.media.durationMs ?? 0) / 1000).ceil()}秒',
-                      ),
-                      IconButton(
-                        key: const Key('media-audio-toggle'),
-                        tooltip: '播放 / 暂停',
-                        onPressed: _toggleAudio,
-                        icon: Icon(
-                          snapshot.data?.playing == true
-                              ? Icons.pause
-                              : Icons.play_arrow,
-                        ),
-                      ),
-                    ],
-                  ),
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            _error!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: _viewerText),
+          ),
+        ),
+      );
+    }
+    if (!_ready) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: CircularProgressIndicator.adaptive(),
+        ),
+      );
+    }
+    if (_video != null) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: Center(
+              child: AspectRatio(
+                aspectRatio: _video!.value.aspectRatio,
+                child: VideoPlayer(_video!),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 10, 18, 2),
+            child: VideoProgressIndicator(
+              _video!,
+              allowScrubbing: false,
+              colors: const VideoProgressColors(
+                playedColor: _viewerAccent,
+                bufferedColor: Color(0x33FFFFFF),
+                backgroundColor: Color(0x22FFFFFF),
+              ),
+            ),
+          ),
+          IconButton(
+            key: const Key('media-video-toggle'),
+            onPressed: _toggleVideo,
+            iconSize: 38,
+            color: _viewerText,
+            icon: Icon(
+              _video!.value.isPlaying ? Icons.pause : Icons.play_arrow,
+            ),
+            tooltip: '播放 / 暂停',
+          ),
+          const SizedBox(height: 6),
+        ],
+      );
+    }
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 6, 20, 22),
+        child: StreamBuilder<PlayerState>(
+          stream: _audio!.playerStateStream,
+          builder: (context, snapshot) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.graphic_eq, size: 56, color: _viewerAccent),
+              const SizedBox(height: 12),
+              Text(
+                '语音 · ${((widget.media.durationMs ?? 0) / 1000).ceil()}秒',
+                style: const TextStyle(color: _viewerText),
+              ),
+              IconButton(
+                key: const Key('media-audio-toggle'),
+                tooltip: '播放 / 暂停',
+                onPressed: _toggleAudio,
+                iconSize: 38,
+                color: _viewerText,
+                icon: Icon(
+                  snapshot.data?.playing == true
+                      ? Icons.pause
+                      : Icons.play_arrow,
                 ),
+              ),
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

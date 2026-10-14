@@ -761,7 +761,7 @@ void main() {
         findsNothing,
       );
       await revealAndTap(tester, action);
-      expect(find.textContaining('原已保存的记录不受影响'), findsOneWidget);
+      expect(find.textContaining('已有的记录不受影响'), findsOneWidget);
       expect(repo.removedPendingAttachments, isEmpty);
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
@@ -840,11 +840,16 @@ void main() {
       await tester.tap(find.byKey(const Key('sync-upload-now')));
       await tester.pumpAndSettle();
       expect(repo.lastAllowMetered, isNull);
-      expect(find.textContaining('只上传确认时队列'), findsOneWidget);
-      await tester.tap(find.text('立即上传'));
+      expect(find.textContaining('只同步确认的这一批'), findsOneWidget);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.text('同步'),
+        ),
+      );
       await tester.pumpAndSettle();
       expect(repo.lastAllowMetered, isTrue);
-      expect(find.text('待上传 0 · 上传中 0 · 失败 0'), findsOneWidget);
+      expect(find.text('待同步 0 · 同步中 0 · 失败 0'), findsOneWidget);
       expectNoLayoutException(tester);
     },
   );
@@ -892,6 +897,36 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('journal-entry-second')), findsOneWidget);
       expect(find.byKey(ValueKey('journal-entry-${first.id}')), findsNothing);
+      expectNoLayoutException(tester);
+    },
+  );
+
+  testWidgets(
+    'record editor shows the quest steps and collapses them on demand',
+    (tester) async {
+      configureTestView(tester);
+      final repo = await createLocalFixture(fixture: LocalFixture.active);
+      final quest = questById('green');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: RecordPage(
+            repository: repo,
+            quest: quest,
+            initialDraft: '',
+            accountId: repo.snapshot.profile!.id,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('探索参考'), findsOneWidget);
+      expect(find.byKey(const Key('record-steps-list')), findsOneWidget);
+      expect(find.text(quest.steps.first), findsOneWidget);
+      await tester.tap(find.byKey(const Key('record-steps-toggle')));
+      await tester.pump();
+      expect(find.byKey(const Key('record-steps-list')), findsNothing);
+      await tester.tap(find.byKey(const Key('record-steps-toggle')));
+      await tester.pump();
+      expect(find.text(quest.steps.first), findsOneWidget);
       expectNoLayoutException(tester);
     },
   );

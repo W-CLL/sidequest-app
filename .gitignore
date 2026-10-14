@@ -74,6 +74,10 @@ local.properties
 /server/backups/
 /server/tmp/
 /.runtime/
+# Django 管理后台（本地运维工具）的独立虚拟环境
+/server/admin/.venv/
+/server/admin/catalog-backups/
+__pycache__/
 *.sqlite-journal
 *.sqlite.service-lock
 *.db.service-lock

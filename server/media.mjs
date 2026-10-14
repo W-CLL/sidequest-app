@@ -14,7 +14,7 @@ export const OUTPUT_LIMITS = Object.freeze({ image: 5 * MiB, video: 30 * MiB, au
 const ACCOUNT_LIMIT = 1024 * MiB;
 const THUMB_LIMIT = MiB;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
-const SAFE_FORMATS = 'mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,jpeg_pipe,png_pipe,webp_pipe,aac,wav';
+const SAFE_FORMATS = 'mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,jpeg_pipe,png_pipe,webp_pipe,aac,wav,image2';
 
 export function checkMediaTools({ ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg', ffprobe = process.env.FFPROBE_PATH || 'ffprobe' } = {}) {
   for (const [name, executable] of [['ffmpeg', ffmpeg], ['ffprobe', ffprobe]]) {
@@ -67,7 +67,7 @@ export class FfmpegProcessor {
     const audio = info.streams.find((stream) => stream.codec_type === 'audio');
     const duration = Number(info.format?.duration ?? (kind === 'audio' ? audio?.duration : video?.duration));
     if (kind === 'image') {
-      assert(video && ['mjpeg', 'png', 'webp'].includes(video.codec_name) && !audio && /^(jpeg_pipe|png_pipe|webp_pipe)$/.test(info.format?.format_name ?? ''), 422, '图片仅支持 JPEG、PNG 或 WebP');
+      assert(video && ['mjpeg', 'png', 'webp'].includes(video.codec_name) && !audio && /^(jpeg_pipe|png_pipe|webp_pipe|image2)$/.test(info.format?.format_name ?? ''), 422, '图片仅支持 JPEG、PNG 或 WebP');
     } else {
       assert(Number.isFinite(duration) && duration > 0 && duration * 1000 <= (kind === 'video' ? 15000 : 60000), 422,
         kind === 'video' ? '视频最多 15 秒' : '语音最多 60 秒');

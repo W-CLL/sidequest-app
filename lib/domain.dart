@@ -34,6 +34,7 @@ class Quest {
     required this.hint,
     this.roleHints = const {},
     this.preferenceTags = const [],
+    this.enabled = true,
   });
   final String id;
   final String title;
@@ -44,6 +45,10 @@ class Quest {
   final String hint;
   final Map<String, String> roleHints;
   final List<String> preferenceTags;
+
+  /// 已停用的任务仍保留在目录中（历史记录与已激活任务照常展示），
+  /// 但不会被推荐、轮换到或作为新用户的初始推荐。
+  final bool enabled;
 }
 
 Quest questById(String id) => questCatalog.firstWhere(
@@ -52,9 +57,12 @@ Quest questById(String id) => questCatalog.firstWhere(
 );
 String nextQuestId(String id) {
   questById(id); // Unknown catalog versions must never silently become green.
-  return questCatalog[(questCatalog.indexWhere((q) => q.id == id) + 1) %
-          questCatalog.length]
-      .id;
+  final start = questCatalog.indexWhere((q) => q.id == id);
+  for (var step = 1; step <= questCatalog.length; step++) {
+    final candidate = questCatalog[(start + step) % questCatalog.length];
+    if (candidate.enabled) return candidate.id;
+  }
+  return id;
 }
 
 String localDay(DateTime date) {
@@ -71,15 +79,19 @@ String recommendQuestId({
   final valid = history.where(ids.contains).toList();
   final recent = valid.skip(valid.length > 7 ? valid.length - 7 : 0).toList();
   var candidates = questCatalog
-      .where((q) => q.id != currentId && !recent.contains(q.id))
+      .where((q) => q.enabled && q.id != currentId && !recent.contains(q.id))
       .toList();
   while (candidates.isEmpty && recent.isNotEmpty) {
     recent.removeAt(0);
     candidates = questCatalog
-        .where((q) => q.id != currentId && !recent.contains(q.id))
+        .where((q) => q.enabled && q.id != currentId && !recent.contains(q.id))
         .toList();
   }
-  if (candidates.isEmpty) return questCatalog.first.id;
+  if (candidates.isEmpty) {
+    return questCatalog
+        .firstWhere((q) => q.enabled, orElse: () => questCatalog.first)
+        .id;
+  }
   final current = currentId == null ? -1 : ids.indexOf(currentId);
   int distance(String id) => current < 0
       ? ids.indexOf(id)

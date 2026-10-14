@@ -9,11 +9,14 @@ import 'package:share_plus/share_plus.dart';
 import 'domain.dart';
 import 'media_widgets.dart';
 import 'repository.dart';
+import 'voice.dart';
 
 const _muted = Color(0xFF69756C);
 const _forest = Color(0xFF234D3C);
-String _errorText(Object error) =>
-    error is QuestException ? error.message : '未能保存，请重试。当前内容仍保留。';
+const _ink = Color(0xFF203B31);
+const _lime = Color(0xFFDFECAC);
+const _pale = Color(0xFFEEF1E6);
+String _errorText(Object error) => userMessageFor(error);
 String _date(DateTime value) {
   final date = value.toLocal();
   return '${date.year}.${date.month.toString().padLeft(2, '0')}.${date.day.toString().padLeft(2, '0')}';
@@ -330,6 +333,8 @@ class _RecordPageState extends State<RecordPage> with WidgetsBindingObserver {
               style: const TextStyle(color: _forest, fontSize: 13),
             ),
             const SizedBox(height: 10),
+            _RecordSteps(quest: widget.quest),
+            const SizedBox(height: 12),
             const Text(
               '这一刻，你发现了什么？',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
@@ -390,7 +395,7 @@ class _RecordPageState extends State<RecordPage> with WidgetsBindingObserver {
               ),
             const SizedBox(height: 12),
             const Text(
-              '完成后先存本机，Wi-Fi 下自动上传。私密保存，不会自动公开。',
+              '写下来，就留住了。稍后自动同步，只有你能看到。',
               style: TextStyle(fontSize: 12, color: _muted, height: 1.5),
             ),
             if (_error != null) ...[
@@ -569,7 +574,7 @@ class _EntryPageState extends State<EntryPage> {
             ],
             const SizedBox(height: 16),
             const Text(
-              '默认私密。编辑已上传记录需要联网；分享前可另选图片。',
+              '只有你能看到。编辑已同步的内容需要网络；分享前可以另选图片。',
               style: TextStyle(fontSize: 12, color: _muted, height: 1.5),
             ),
             if (_entry.syncError != null) ErrorNotice(_entry.syncError!),
@@ -1088,9 +1093,9 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
   Future<void> _upload() async {
     if (!await confirmPrivateAction(
           context,
-          '立即上传当前队列？',
-          '本次允许使用移动网络，只上传确认时队列中的内容。之后仍只在 Wi-Fi 下自动上传。',
-          '立即上传',
+          '现在同步？',
+          '这次会用流量，只同步确认的这一批；之后仍在无线网时自动同步。',
+          '同步',
         ) ||
         !mounted) {
       return;
@@ -1136,8 +1141,8 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
     if (_busy ||
         !await confirmPrivateAction(
           context,
-          '移除附件，仅上传文字？',
-          '这条待传记录将不再包含图片、视频或语音，文字会保留。原已保存的记录不受影响。移除后无法从这条待传记录恢复附件；确认后按当前网络规则重试上传。',
+          '移除附件，仅同步文字？',
+          '这条还没同步的记录会去掉图片、视频和语音，只留文字。已有的记录不受影响；去掉的附件无法恢复。',
           '移除附件并重试',
         ) ||
         !mounted) {
@@ -1162,7 +1167,7 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
     if (!await confirmPrivateAction(
       context,
       '删除这份冲突草稿？',
-      '只删除这份本机保留的草稿，不影响已完成的记录或其他设备进度。',
+      '只删除这份留在手机里的草稿，不影响已完成的记录和别的设备。',
       '删除草稿',
     )) {
       return;
@@ -1177,24 +1182,24 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('上传与同步')),
+    appBar: AppBar(title: const Text('同步')),
     body: SafeArea(
       child: ListView(
         key: const Key('sync-status-scroll'),
         padding: const EdgeInsets.all(20),
         children: [
           const Text(
-            'Wi-Fi 下自动上传',
+            '稍后自动同步',
             style: TextStyle(fontSize: 23, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
           const Text(
-            '待上传内容先保存在本机。卸载或清除数据前，请确认全部上传完成。',
+            '还没同步的内容先存在手机里。卸载或清除数据前，请确认全部同步完成。',
             style: TextStyle(color: _muted, height: 1.5),
           ),
           const SizedBox(height: 16),
           Text(
-            '待上传 ${_summary?.pending ?? 0} · 上传中 ${_summary?.uploading ?? 0} · 失败 ${_summary?.failed ?? 0}',
+            '待同步 ${_summary?.pending ?? 0} · 同步中 ${_summary?.uploading ?? 0} · 失败 ${_summary?.failed ?? 0}',
             key: const Key('sync-summary'),
           ),
           if (_summary?.message != null)
@@ -1204,7 +1209,7 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
             ),
           if (_summary?.requiresLogin == true) ...[
             const SizedBox(height: 12),
-            const Text('登录已失效，队列和本机内容仍保留。请登录原账号继续上传。'),
+            const Text('登录过期了，内容都还在。登录原账号后继续同步。'),
             OutlinedButton(
               key: const Key('sync-login-action'),
               onPressed: _busy || widget.onLogin == null
@@ -1222,7 +1227,7 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
             onPressed: _busy || _summary?.requiresLogin == true
                 ? null
                 : _upload,
-            child: Text(_busy ? '正在上传…' : '立即上传当前队列'),
+            child: Text(_busy ? '正在同步…' : '同步'),
           ),
           for (final entry
               in _state?.entries.where((e) => e.syncStatus != 'saved') ??
@@ -1248,7 +1253,7 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
                   onPressed: _busy || _summary?.requiresLogin == true
                       ? null
                       : () => _removePendingAttachments(entry),
-                  child: const Text('移除附件，仅上传文字'),
+                  child: const Text('移除附件，仅同步文字'),
                 ),
               ),
           ],
@@ -1297,6 +1302,106 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
       ),
     ),
   );
+}
+
+/// 记录页内的探索参考：与「探索详情」同一份步骤，默认展开、可折叠。
+class _RecordSteps extends StatefulWidget {
+  const _RecordSteps({required this.quest});
+  final Quest quest;
+  @override
+  State<_RecordSteps> createState() => _RecordStepsState();
+}
+
+class _RecordStepsState extends State<_RecordSteps> {
+  bool _open = true;
+
+  @override
+  Widget build(BuildContext context) {
+    final steps = widget.quest.steps;
+    if (steps.isEmpty) return const SizedBox.shrink();
+    return Material(
+      color: _pale,
+      borderRadius: BorderRadius.circular(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            key: const Key('record-steps-toggle'),
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => setState(() => _open = !_open),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+              child: Row(
+                children: [
+                  const Icon(Icons.checklist_rounded, size: 18, color: _forest),
+                  const SizedBox(width: 8),
+                  const Text(
+                    '探索参考',
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                      color: _ink,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    _open ? '收起' : '展开',
+                    style: const TextStyle(fontSize: 12, color: _muted),
+                  ),
+                  Icon(
+                    _open ? Icons.expand_less : Icons.expand_more,
+                    size: 20,
+                    color: _muted,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_open)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+              child: Column(
+                key: const Key('record-steps-list'),
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var index = 0; index < steps.length; index++)
+                    Padding(
+                      padding: EdgeInsets.only(top: index == 0 ? 2 : 8),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          CircleAvatar(
+                            radius: 11,
+                            backgroundColor: _lime,
+                            child: Text(
+                              '${index + 1}',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: _forest,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              steps[index],
+                              style: const TextStyle(
+                                fontSize: 13.5,
+                                height: 1.55,
+                                color: _ink,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class EditorBottomBar extends StatelessWidget {

@@ -6,16 +6,21 @@ const preferences = ['安静独处','熟人同行','观察细节','动手创作'
 const roles = ['student','employee','freelancer','leader','caregiver','retired','transition','other'];
 const originalIds = ['green','light','texture','sounds','sky','corner','color','leaves','object','shadow','water','lines','paper','detail','pause','gratitude'];
 const itemFields = ['id','title','subtitle','category','minutes','steps','hint','roleHints','preferenceTags'];
+// 可选字段：enabled=false 表示「已停用」——仍保留在目录中（历史记录/已激活任务照常展示），
+// 但不会再被推荐或轮换到。缺省视为启用；只在停用时写入该键，保持 catalog.json 差异最小。
+const optionalFields = ['enabled'];
+export const isEnabled = quest => quest.enabled !== false;
 const plainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const text = value => typeof value === 'string' && value.trim().length > 0 && value === value.trim() && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value);
 
 export function validateCatalog(catalog) {
-  if (!Array.isArray(catalog) || catalog.length !== 40) throw Error('Catalog must contain exactly 40 activities');
+  if (!Array.isArray(catalog) || catalog.length < 40) throw Error('Catalog must keep at least the original 40 activities; new ones are appended');
   const seen = new Set();
   for (const [index, quest] of catalog.entries()) {
     const fail = field => { throw Error(`Invalid catalog item ${index} (${quest?.id ?? 'unknown'}): ${field}`); };
     if (!plainObject(quest)) fail('activity must be an object');
-    if (Object.keys(quest).some(key => !itemFields.includes(key)) || itemFields.some(key => !Object.hasOwn(quest, key))) fail('fields must match the Quest model');
+    if (Object.keys(quest).some(key => !itemFields.includes(key) && !optionalFields.includes(key)) || itemFields.some(key => !Object.hasOwn(quest, key))) fail('fields must match the Quest model');
+    if (Object.hasOwn(quest, 'enabled') && typeof quest.enabled !== 'boolean') fail('enabled must be a boolean when present');
     if (typeof quest.id !== 'string' || !/^[a-z][a-z0-9_]{0,63}$/u.test(quest.id) || seen.has(quest.id)) fail('id must be a unique lowercase identifier');
     seen.add(quest.id);
     for (const field of ['title','subtitle','category','hint']) if (!text(quest[field])) fail(`${field} must be non-empty, trimmed text`);
@@ -25,7 +30,7 @@ export function validateCatalog(catalog) {
     if (!Array.isArray(quest.preferenceTags) || quest.preferenceTags.length === 0 || quest.preferenceTags.some(tag => !preferences.includes(tag)) || new Set(quest.preferenceTags).size !== quest.preferenceTags.length) fail('preferenceTags must be non-empty, unique, known values');
   }
   if (originalIds.some((id, index) => catalog[index].id !== id)) throw Error('The original 16 activity IDs and order must be preserved');
-  for (const preference of preferences) if (catalog.filter(quest => quest.preferenceTags.includes(preference)).length < 8) throw Error(`Too few activities for ${preference}; at least 8 are required`);
+  for (const preference of preferences) if (catalog.filter(quest => isEnabled(quest) && quest.preferenceTags.includes(preference)).length < 8) throw Error(`Too few activities for ${preference}; at least 8 are required`);
   return catalog;
 }
 
@@ -47,6 +52,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const target = new URL('../lib/quest_catalog.g.dart', import.meta.url);
   if (process.argv.includes('--check')) {
     if (readFileSync(target, 'utf8').replace(/\r\n/g, '\n') !== output) throw Error('Generated Flutter catalog is stale. Run node scripts/generate-catalog.mjs');
-    console.log('40-activity catalog validated; Flutter output matches source.');
+    console.log(`${catalog.length}-activity catalog validated; Flutter output matches source.`);
   } else writeFileSync(target, output);
 }

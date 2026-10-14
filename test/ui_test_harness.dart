@@ -104,6 +104,12 @@ class InMemoryQuestRepository implements QuestRepository {
   bool get isConfigured => true;
   @override
   String get cacheScope => 'fixture';
+
+  /// 静默上报在 UI 测试里只记录、不外发（与真实仓储同语义：用户无感知）。
+  final reportedProblems = <(String scope, Object error)>[];
+  @override
+  void reportProblem(Object error, String scope) =>
+      reportedProblems.add((scope, error));
   @override
   Stream<SyncSummary> get syncUpdates => _updates.stream;
 
@@ -453,7 +459,7 @@ class InMemoryQuestRepository implements QuestRepository {
     if (pendingRemovalError != null) throw QuestException(pendingRemovalError!);
     final entry = snapshot.entries.firstWhere((e) => e.id == entryId);
     if (entry.syncStatus != 'failed' || entry.attachments.isEmpty) {
-      throw const QuestException('当前记录不支持移除待传附件。');
+      throw const QuestException('当前记录不支持移除待同步附件。');
     }
     removedPendingAttachments.add(entryId);
     _set(
