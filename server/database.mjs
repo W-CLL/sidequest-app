@@ -48,7 +48,8 @@ export function openDatabase(databasePath) {
       );
       CREATE INDEX IF NOT EXISTS entries_by_user ON entries(user_id, created_at DESC, id DESC);
       CREATE TABLE IF NOT EXISTS sessions (
-        token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL
+        token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL,
+        client TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS sessions_by_user ON sessions(user_id);
     `);
@@ -94,6 +95,11 @@ export function openDatabase(databasePath) {
       );
       PRAGMA user_version = 2;
     `);
+    // v2 增量列：给旧库补“登录来源”列（幂等、非破坏性；不改变 user_version）。
+    const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all();
+    if (!sessionColumns.some((column) => column.name === 'client')) {
+      db.exec("ALTER TABLE sessions ADD COLUMN client TEXT NOT NULL DEFAULT ''");
+    }
     db.prepare("INSERT OR IGNORE INTO server_metadata(key,value) VALUES('media_owner',?)").run(randomUUID());
   });
   return db;

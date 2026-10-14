@@ -35,6 +35,42 @@ test('client diagnostics are accepted silently, stored locally, and never requir
   assert.equal(lines[1].scope, 'request:sync'); assert.ok(lines[1].accountId); assert.equal(lines[1].type, 'SocketException');
 });
 
+test('web cookie sessions: login sets an HttpOnly cookie, cookie-only auth works, logout clears it', async (t) => {
+  const { api, app, register } = await fixture(t);
+  const registered = await api('register', { nickname: '网页玩家', password, role: 'student', preferences: [] }, undefined, { headers: { 'X-Sidequest-Client': 'web/0.1.0' } });
+  assert.equal(registered.status, 201);
+  const setCookie = registered.headers.get('set-cookie');
+  assert.ok(setCookie && setCookie.startsWith('sidequest_session='), String(setCookie));
+  assert.ok(setCookie.includes('HttpOnly') && setCookie.includes('SameSite=Lax') && setCookie.includes('Max-Age=604800'));
+  const cookie = setCookie.split(';')[0];
+  // 登录来源标记写进了会话表；Bearer 通道照旧返回 token。
+  assert.equal(app.db.prepare('SELECT client FROM sessions').all().some((row) => row.client === 'web/0.1.0'), true);
+  assert.match(registered.body.token, /^[A-Za-z0-9_-]{43}$/);
+  // Cookie 单独即可通过鉴权；Bearer 也依旧有效，两者互不影响。
+  const cookieState = await api('entries', undefined, undefined, { headers: { Cookie: cookie } });
+  assert.equal(cookieState.status, 200);
+  assert.equal((await api('state', undefined, registered.body.token)).body.state.profile.nickname, '网页玩家');
+  // 服务端仍接受不带 Cookie 的 Bearer 请求（安卓端不受影响）。
+  assert.equal((await api('entries', undefined, registered.body.token)).status, 200);
+  // 登出同时清除浏览器 Cookie；旧 Cookie 随即失效。
+  const logout = await api('logout', {}, registered.body.token);
+  assert.ok((logout.headers.get('set-cookie') ?? '').includes('Max-Age=0'));
+  assert.equal((await api('entries', undefined, undefined, { headers: { Cookie: cookie } })).status, 401);
+});
+
+test('web cookie sessions slide: renewal refreshes the browser cookie after a day', async (t) => {
+  const { api, register, setTime } = await fixture(t);
+  const registered = await register();
+  const cookie = registered.headers.get('set-cookie').split(';')[0];
+  // 当天使用：未进入续期窗口，不重发 Set-Cookie。
+  const fresh = await api('state', undefined, undefined, { headers: { Cookie: cookie } });
+  assert.equal(fresh.status, 200); assert.equal(fresh.headers.get('set-cookie'), null);
+  setTime('2026-10-11T07:00:00.000Z'); // +25 小时：进入滑动续期窗口。
+  const renewed = await api('entries', undefined, undefined, { headers: { Cookie: cookie } });
+  assert.equal(renewed.status, 200);
+  assert.ok((renewed.headers.get('set-cookie') ?? '').includes('sidequest_session='));
+});
+
 test('download page, latest APK, and legal pages are public; the link always tracks the newest build', async (t) => {
   const { base, directory } = await fixture(t);
   assert.equal((await fetch(`${base}/`, { redirect: 'manual' })).status, 302);

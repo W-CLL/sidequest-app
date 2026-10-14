@@ -18,11 +18,33 @@ const roles = new Set(['student','employee','freelancer','leader','caregiver','r
 const preferenceChoices = new Set(['安静独处','熟人同行','观察细节','动手创作','尝试新鲜','熟悉安心']);
 const passwordOptions = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 const SESSION_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_COOKIE = 'sidequest_session';
 // 滑动续期节奏：距上次延长超过 24 小时才写库（活跃用户每天续，闲置用户仍会到期）
 const SESSION_RENEW_AFTER_MS = 24 * 60 * 60 * 1000;
+const SESSION_COOKIE_MAX_AGE = Math.floor(SESSION_MS / 1000);
 const MAX_BODY_BYTES = 16 * 1024;
 const dateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' });
 const digest = (value) => createHash('sha256').update(value).digest('hex');
+// 浏览器会话 Cookie（网页版）：HttpOnly + Secure + SameSite=Lax，7 天滑动续期与令牌一致。
+const sessionCookie = (token, maxAge = SESSION_COOKIE_MAX_AGE) =>
+  `${SESSION_COOKIE}=${token}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
+function cookieToken(request) {
+  const header = request.headers.cookie;
+  if (typeof header !== 'string') return null;
+  for (const part of header.split(';')) {
+    const piece = part.trim();
+    if (piece.startsWith(`${SESSION_COOKIE}=`)) {
+      const value = piece.slice(SESSION_COOKIE.length + 1);
+      return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
+    }
+  }
+  return null;
+}
+// 登录来源标记（仅登录/注册时记录一次）：如 android/0.2.0+3 或 web/0.2.0+3。
+function clientTagOf(request) {
+  const raw = request.headers['x-sidequest-client'];
+  return typeof raw === 'string' && /^[a-z0-9][a-z0-9._+/-]{0,79}$/i.test(raw) ? raw : '';
+}
 const hashObject = (value) => digest(canonical(value));
 const textLength = (value) => [...value].length;
 
@@ -316,22 +338,33 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
     activeAuth++;
     try { return await deriveKey(password, salt, 64, passwordOptions); } finally { activeAuth--; }
   }
-  function session(userId) {
+  function session(userId, client = '') {
     const token = randomBytes(32).toString('base64url');
     db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(now().getTime());
-    db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(digest(token), userId, now().getTime() + SESSION_MS);
+    db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,client) VALUES(?,?,?,?)').run(digest(token), userId, now().getTime() + SESSION_MS, client);
     return token;
   }
   function authenticate(request, optional = false) {
     const header = request.headers.authorization;
-    if (!header && optional) return null;
-    assert(typeof header === 'string' && /^Bearer [A-Za-z0-9_-]{43}$/.test(header), 401, '请先登录后再继续');
-    const hash = digest(header.slice(7));
+    let token, viaCookie = false;
+    if (header === undefined) {
+      // 无 Bearer 时回退到浏览器 Cookie（网页版）；两者都无才按未登录处理。
+      token = cookieToken(request);
+      viaCookie = token !== null;
+      if (token === null && optional) return null;
+      if (token === null) throw new HttpError(401, '请先登录后再继续');
+    } else {
+      assert(typeof header === 'string' && /^Bearer [A-Za-z0-9_-]{43}$/.test(header), 401, '请先登录后再继续');
+      token = header.slice(7);
+    }
+    const hash = digest(token);
     const found = db.prepare('SELECT user_id FROM sessions WHERE token_hash=? AND expires_at>?').get(hash, now().getTime());
     assert(found, 401, '登录已失效，请重新登录；本机待上传记录仍会保留');
     // 滑动续期：活跃使用自动延长有效期，避免"每天在用却被固定到期踢下线"。
-    db.prepare('UPDATE sessions SET expires_at=? WHERE token_hash=? AND expires_at<?')
-      .run(now().getTime() + SESSION_MS, hash, now().getTime() + SESSION_MS - SESSION_RENEW_AFTER_MS);
+    const renewed = db.prepare('UPDATE sessions SET expires_at=? WHERE token_hash=? AND expires_at<?')
+      .run(now().getTime() + SESSION_MS, hash, now().getTime() + SESSION_MS - SESSION_RENEW_AFTER_MS).changes > 0;
+    // Cookie 会话续期时同步刷新浏览器端有效期；应用走 Bearer，不受影响。
+    if (viaCookie && renewed) request.sqCookieRefresh = token;
     return { id: found.user_id, hash };
   }
   const stateRow = (id) => db.prepare('SELECT * FROM quest_state WHERE user_id=?').get(id);
@@ -521,6 +554,12 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
     });
   }
   function respond(response, status, body, origin) {
+    const request = response.req;
+    if (request) {
+      if (request.sqCookieClear) response.setHeader('Set-Cookie', sessionCookie('', 0));
+      else if (request.sqCookieNew) response.setHeader('Set-Cookie', sessionCookie(request.sqCookieNew));
+      else if (request.sqCookieRefresh) response.setHeader('Set-Cookie', sessionCookie(request.sqCookieRefresh));
+    }
     response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'",
       ...(origin ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}), ...(status === 429 ? { 'Retry-After': '60' } : {}), ...(status === 413 ? { Connection: 'close' } : {}) }); response.end(JSON.stringify(body));
   }
@@ -530,7 +569,7 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
       const origin = request.headers.origin; assert(!origin || allowedOrigins.includes(origin), 403, '此来源未获允许'); allowedOrigin = origin;
       const { pathname, searchParams } = new URL(request.url, 'http://localhost');
       if (request.method === 'OPTIONS') {
-        response.writeHead(204, { ...(allowedOrigin ? { 'Access-Control-Allow-Origin': allowedOrigin, Vary: 'Origin' } : {}), 'Access-Control-Allow-Methods': 'GET,HEAD,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization,Content-Type,X-Sidequest-Protocol,Range', 'Access-Control-Max-Age': '600' }); response.end(); return;
+        response.writeHead(204, { ...(allowedOrigin ? { 'Access-Control-Allow-Origin': allowedOrigin, Vary: 'Origin' } : {}), 'Access-Control-Allow-Methods': 'GET,HEAD,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization,Content-Type,X-Sidequest-Protocol,X-Sidequest-Client,Range', 'Access-Control-Max-Age': '600' }); response.end(); return;
       }
       if (request.method === 'GET' && pathname === '/api/health') { respond(response, 200, { ok: true, version: '0.2.0', protocolVersion: 2, mode: 'private-multimedia', timezone: 'Asia/Shanghai', mediaReady: true }, allowedOrigin); return; }
       if (request.method === 'POST' && pathname === '/api/diagnostics') {
@@ -611,14 +650,18 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
               const id = randomUUID(), recommended = recommendQuest({ preferences: profile.preferences });
               db.prepare('INSERT INTO users(id,nickname,normalized_nickname,password_salt,password_hash,role,preferences) VALUES(?,?,?,?,?,?,?)').run(id, nickname.display, nickname.normalized, salt, hash, profile.role, JSON.stringify(profile.preferences));
               db.prepare('INSERT INTO quest_state(user_id,recommended_quest_id,day,recommendation_history) VALUES(?,?,?,?)').run(id, recommended, calendarDay(now()), JSON.stringify([recommended]));
-              return { token: session(id), state: snapshot(id) };
-            }); respond(response, 201, result, allowedOrigin); return;
+              return { token: session(id, clientTagOf(request)), state: snapshot(id) };
+            });
+            request.sqCookieNew = result.token;
+            respond(response, 201, result, allowedOrigin); return;
           } catch (error) { if (String(error.message).includes('UNIQUE constraint failed: users.normalized_nickname')) throw new HttpError(409, '这个昵称已被使用，请换一个'); throw error; }
         }
         const user = db.prepare('SELECT * FROM users WHERE normalized_nickname=?').get(nickname.normalized);
         const key = await passwordKey(password, user?.password_salt ?? '00000000000000000000000000000000');
         assert(timingSafeEqual(key, user ? Buffer.from(user.password_hash, 'hex') : Buffer.alloc(64)) && user && db.prepare('SELECT id FROM users WHERE id=?').get(user.id), 401, '昵称或密码不正确');
-        respond(response, 200, tx(() => ({ token: session(user.id), state: snapshot(user.id) })), allowedOrigin); return;
+        const loginResult = tx(() => ({ token: session(user.id, clientTagOf(request)), state: snapshot(user.id) }));
+        request.sqCookieNew = loginResult.token;
+        respond(response, 200, loginResult, allowedOrigin); return;
       }
       if (action === 'uploads') { respond(response, 201, { media: media.reserve(auth.id, body) }, allowedOrigin); return; }
       if (action === 'sync') { const result = synchronize(auth.id, body); media.cleanup(); respond(response, 200, result, allowedOrigin); return; }
@@ -629,6 +672,7 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
         rateLimit(request, user.normalized_nickname); const key = await passwordKey(password, user.password_salt);
         assert(timingSafeEqual(key, Buffer.from(user.password_hash, 'hex')), 401, '密码不正确，账号未删除'); authenticate(request);
         tx(() => { media.deleteAccount(auth.id); db.prepare('DELETE FROM users WHERE id=?').run(auth.id); }); media.cleanup();
+        request.sqCookieClear = true;
         respond(response, 200, { state: snapshot() }, allowedOrigin); return;
       }
       const result = tx(() => {
@@ -655,7 +699,9 @@ export function createApp({ databasePath = './data/sidequest-v2.sqlite', mediaDi
           progressAction(auth.id, action, payload);
         }
         return { state: snapshot(auth.id) };
-      }); media.cleanup(); respond(response, 200, result, allowedOrigin);
+      }); media.cleanup();
+      if (action === 'logout') request.sqCookieClear = true;
+      respond(response, 200, result, allowedOrigin);
     } catch (error) {
       if (!response.headersSent && !response.destroyed) respond(response, error instanceof HttpError ? error.status : 500, { error: error instanceof HttpError ? error.message : '服务暂时不可用，请稍后再试' }, allowedOrigin);
       else if (!response.destroyed) response.end();
