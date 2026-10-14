@@ -175,12 +175,16 @@ function formatBytes(size) {
 
 function downloadPage(apk) {
   const latest = apk
-    ? `<a class="btn" href="/download/latest">下载最新版本</a>
+    ? `<a class="btn" href="/download/latest">下载安卓版本</a>
 <p class="meta">${escapeHtml(apk.name)} · ${formatBytes(apk.size)} · 更新于 ${escapeHtml(new Date(apk.mtimeMs).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }))}</p>`
     : '<p>暂时还没有可下载的版本，稍后再来看看。</p>';
   return pageShell('支线 · 下载', `<h1>支线</h1>
 <p>每天一件 5–10 分钟的小事，重新看见平常的日子；把发现记进只属于你的探索册。</p>
+<h2>安卓手机</h2>
 ${latest}
+<h2>iPhone / 电脑</h2>
+<a class="btn" href="/app/">打开网页版</a>
+<p class="meta">在浏览器里直接使用；iPhone 上用 Safari 打开后，点分享「添加到主屏幕」，就能像应用一样打开。</p>
 <h2>安装提示</h2>
 <ul>
 <li>手机提示「不允许安装未知应用」时，按提示允许一次，再重新安装即可。</li>
