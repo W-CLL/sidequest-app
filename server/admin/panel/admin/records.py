@@ -5,7 +5,7 @@
 - 删除墓碑：只读，用于排查「删除后又出现」或同步未收敛。
 """
 from django.contrib import admin
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
 from django.http import Http404
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
@@ -16,6 +16,16 @@ from ..models import Entry, EntryTombstone, MediaBinding
 from .helpers import cst_from_iso, short
 
 DRAWER_THUMB_HEIGHT = 132
+
+
+def nick_display(entry):
+    """账号昵称；若账号行已删除（注销）则显示占位，避免页面 500。"""
+    if not entry.user_id:
+        return '-'
+    try:
+        return entry.user.nickname
+    except ObjectDoesNotExist:
+        return '账号已注销'
 
 
 def media_items_html(entry, thumb_height=110):
@@ -126,7 +136,8 @@ class EntryAdmin(ModelAdmin):
         """记录抽屉 fragment：元信息 + 记录内容 + 媒体。由列表页 record_drawer.js 注入。"""
         if not self.has_view_permission(request):
             raise PermissionDenied('没有查看记录的权限。')
-        entry = Entry.objects.select_related('user').filter(pk=entry_id).first()
+        # 不用 select_related：注销账号后残留的“孤儿记录”也能查到并正常展示。
+        entry = Entry.objects.filter(pk=entry_id).first()
         if entry is None:
             raise Http404('找不到这条记录。')
         media_count = MediaBinding.objects.filter(
@@ -136,10 +147,10 @@ class EntryAdmin(ModelAdmin):
         context = {
             'title': '记录详情',
             'entry': entry,
-            'user_nick': entry.user.nickname if entry.user_id else '-',
+            'user_nick': nick_display(entry),
             'created_cst': cst_from_iso(entry.created_at),
             'media_count': media_count,
-            'media_html': media_html or format_html('<span style="color:#8a948c;font-size:13px">无</span>'),
+            'media_html': media_html or format_html('<span style="color:#8a948c;font-size:13px">{}</span>', '无'),
         }
         return TemplateResponse(request, 'admin/panel/record_drawer.html', context)
 
@@ -155,7 +166,7 @@ class EntryAdmin(ModelAdmin):
 
     @admin.display(description='账号', ordering='user__nickname')
     def user_nick(self, obj):
-        return obj.user.nickname if obj.user_id else '-'
+        return nick_display(obj)
 
     @admin.display(description='内容')
     def text_short(self, obj):

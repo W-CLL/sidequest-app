@@ -18,7 +18,7 @@ class Entry(models.Model):
     )
     quest_id = models.TextField(verbose_name='活动 ID')
     quest_title = models.TextField(verbose_name='活动标题')
-    text = models.TextField(verbose_name='记录内容', help_text='直接修改数据库文本，不会推进 revision；仅本地调试用。')
+    text = models.TextField(verbose_name='记录内容')
     created_at = models.TextField(verbose_name='创建时间（UTC ISO）')
     updated_at = models.TextField(verbose_name='更新时间（UTC ISO）')
     revision = models.IntegerField(verbose_name='修订号')

@@ -139,6 +139,28 @@ class Command(BaseCommand):
                            '  └ 抽屉含元信息与正文结构', 'sqr-meta/sqr-text')
             self._check('记录 · 抽屉（不存在的记录）→ 404', client.get('/admin/panel/entry/no-such-record/drawer/'), (404,))
 
+            no_media_entry = (
+                Entry.objects.exclude(
+                    pk__in=MediaBinding.objects.filter(target_kind='entry').values('target_id')
+                )
+                .order_by('-created_at')
+                .first()
+            )
+            if no_media_entry is not None:
+                empty_drawer = self._check(
+                    '记录 · 抽屉（无媒体记录）', client.get(f'/admin/panel/entry/{no_media_entry.pk}/drawer/')
+                )
+                if empty_drawer is not None and empty_drawer.status_code == 200:
+                    self._flag('无' in empty_drawer.content.decode('utf-8'), '  └ 空媒体占位显示「无」', '无')
+
+            orphan_entry = Entry.objects.filter(user__isnull=True).order_by('-created_at').first()
+            if orphan_entry is not None:
+                orphan_drawer = self._check(
+                    '记录 · 抽屉（账号已注销的孤儿记录）', client.get(f'/admin/panel/entry/{orphan_entry.pk}/drawer/')
+                )
+                if orphan_drawer is not None and orphan_drawer.status_code == 200:
+                    self._flag('账号已注销' in orphan_drawer.content.decode('utf-8'), '  └ 孤儿记录显示「账号已注销」', '账号已注销')
+
         media = Media.objects.filter(status='ready', content_name__isnull=False).first()
         if media is not None:
             self._check(f'媒体详情（播放器）{media.id[:8]}', client.get(f'/admin/panel/media/{media.id}/change/'))
