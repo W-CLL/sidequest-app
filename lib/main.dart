@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -21,6 +22,26 @@ void main() {
     ),
   );
   unawaited(sync_boot.initializeBackgroundSync());
+  _keepWebFramesDuringStartup();
+}
+
+/// 网页版专属：缺字回退字体（中文、emoji 等）在首帧之后才异步下载完成，
+/// 而引擎在字体就绪后不会主动重绘——页面静止时文字会停留在「缺字方块」，
+/// 直到用户第一次触摸/移动。启动后的一小段时间内周期性驱动重绘，
+/// 让字体就绪后立即呈现；约 18 秒后自动停止，对其它平台零影响。
+void _keepWebFramesDuringStartup() {
+  if (!kIsWeb) return;
+  var remaining = 60; // 60 × 300ms ≈ 18 秒
+  Timer.periodic(const Duration(milliseconds: 300), (timer) {
+    if (remaining-- <= 0) {
+      timer.cancel();
+      return;
+    }
+    for (final view in WidgetsBinding.instance.renderViews) {
+      view.markNeedsPaint();
+    }
+    WidgetsBinding.instance.scheduleFrame();
+  });
 }
 
 class SideQuestApp extends StatelessWidget {
