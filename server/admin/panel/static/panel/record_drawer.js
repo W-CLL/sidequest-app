@@ -77,13 +77,10 @@
         if (!target || !target.closest) {
             return;
         }
-        var trigger = target.closest('a[data-sq-record]');
+        var trigger = target.closest('[data-sq-record]');
         if (trigger) {
             event.preventDefault();
             var url = trigger.getAttribute('data-sq-record-url');
-            if (!url) {
-                url = (trigger.getAttribute('href') || '').replace(/change\/$/, 'drawer/');
-            }
             if (url) {
                 openDrawer(url);
             }

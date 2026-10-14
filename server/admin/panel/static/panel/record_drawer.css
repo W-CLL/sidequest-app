@@ -11,6 +11,7 @@
     --sqr-text-faint: #8a948c;
     --sqr-chip-bg: #eef1e6;
     --sqr-chip-text: #234d3c;
+    --sqr-link: #234d3c;
     --sqr-error-bg: #fdeceb;
     --sqr-error-border: #f3b6b0;
     --sqr-error-text: #b42318;
@@ -27,6 +28,7 @@ html.dark {
     --sqr-text-faint: var(--color-base-500, #71717a);
     --sqr-chip-bg: var(--color-base-800, #2c2c2e);
     --sqr-chip-text: var(--color-base-200, #e4e4e7);
+    --sqr-link: var(--color-primary-400, #7aa06e);
     --sqr-error-bg: rgba(180, 35, 24, 0.22);
     --sqr-error-border: rgba(244, 63, 94, 0.36);
     --sqr-error-text: #f4a3a3;
@@ -171,4 +173,20 @@ html.dark {
 
 .sqr-media {
     align-items: center;
+}
+
+/* 列表「查看」按钮：外观同链接，无 href，不做跳转 */
+.sqr-open {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    color: var(--sqr-link);
+    font: inherit;
+    font-size: 13.5px;
+    cursor: pointer;
+}
+
+.sqr-open:hover {
+    text-decoration: underline;
 }

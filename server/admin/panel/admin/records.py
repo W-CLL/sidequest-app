@@ -1,8 +1,7 @@
 """记录与删除墓碑。
 
-- 记录：列表「查看」走右侧抽屉（内容 + 媒体；媒体点击由灯箱弹窗接管），
-  不在列表内跳详情页；仅允许修改 text（本地调试，不推进 revision）；
-  禁止新增；允许删除。
+- 记录：只读（用户数据）。列表「查看」走右侧抽屉（内容 + 媒体；媒体点击由灯箱弹窗接管），
+  查看为页内抽屉、不做跳转；禁止新增，禁止编辑（change 直连 403）；允许删除。
 - 删除墓碑：只读，用于排查「删除后又出现」或同步未收敛。
 """
 from django.contrib import admin
@@ -87,7 +86,7 @@ def media_items_html(entry, thumb_height=110):
 
 @admin.register(Entry)
 class EntryAdmin(ModelAdmin):
-    list_display = ('view_link', 'quest_title', 'user_nick', 'text_short', 'created_cst', 'revision', 'media_count', 'edit_link')
+    list_display = ('view_link', 'quest_title', 'user_nick', 'text_short', 'created_cst', 'revision', 'media_count')
     list_display_links = None
     list_filter = ('quest_id',)
     search_fields = ('text', 'quest_title', 'user__nickname')
@@ -103,6 +102,14 @@ class EntryAdmin(ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+    def has_change_permission(self, request, obj=None):
+        # 记录是用户数据：后台只读；查看走抽屉，不提供编辑入口。
+        return False
+
+    def change_view(self, request, object_id, form_url='', extra_context=None):
+        # 查看只走抽屉：记录不提供独立的详情页/编辑页。
+        raise PermissionDenied('记录为只读，请在列表中用「查看」抽屉浏览。')
 
     # ---- 记录抽屉（只读 fragment）------------------------------------------
     def get_urls(self):
@@ -138,19 +145,12 @@ class EntryAdmin(ModelAdmin):
 
     @admin.display(description='查看')
     def view_link(self, obj):
+        # 无 href 的按钮：查看只开抽屉，永远不会跳转。
         return format_html(
-            '<a href="{}" data-sq-record="{}" data-sq-record-url="{}" '
-            'title="抽屉查看记录内容与媒体">查看</a>',
-            reverse('admin:panel_entry_change', args=[obj.pk]),
+            '<button type="button" class="sqr-open" data-sq-record="{}" data-sq-record-url="{}" '
+            'title="抽屉查看记录内容与媒体">查看</button>',
             obj.pk,
             reverse('admin:panel_entry_drawer', args=[obj.pk]),
-        )
-
-    @admin.display(description='编辑')
-    def edit_link(self, obj):
-        return format_html(
-            '<a href="{}">编辑</a>',
-            reverse('admin:panel_entry_change', args=[obj.pk]),
         )
 
     @admin.display(description='账号', ordering='user__nickname')

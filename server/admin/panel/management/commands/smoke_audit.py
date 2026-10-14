@@ -90,6 +90,8 @@ class Command(BaseCommand):
             entry_list_html = entry_list.content.decode('utf-8')
             self._flag('panel/record_drawer.js' in entry_list_html, '  └ 记录抽屉 JS 已引用（Media 注入）', 'record_drawer.js')
             self._flag('panel/record_drawer.css' in entry_list_html, '  └ 记录抽屉 CSS 已引用', 'record_drawer.css')
+            self._flag('data-sq-record-url' in entry_list_html, '  └ 查看按钮已接线（抽屉）', 'data-sq-record-url')
+            self._flag('/change/' not in entry_list_html, '  └ 列表无编辑/跳转链接', 'no /change/')
         self._check('媒体列表', client.get('/admin/panel/media/'))
         self._check('媒体绑定列表', client.get('/admin/panel/mediabinding/'))
         self._check('账号列表', client.get('/admin/panel/user/'))
@@ -111,7 +113,6 @@ class Command(BaseCommand):
         self._check('下载统计 change 直连 → 403', client.get('/admin/panel/downloadevent/any/change/'), (403,))
 
         samples = [
-            (Entry.objects.order_by('-created_at').first(), '记录详情', '/admin/panel/entry/{}/change/'),
             (MediaBinding.objects.first(), '媒体绑定详情', '/admin/panel/mediabinding/{}/change/'),
             (QuestState.objects.first(), '活动进度详情', '/admin/panel/queststate/{}/change/'),
             (SyncBranch.objects.first(), '同步分支详情', '/admin/panel/syncbranch/{}/change/'),
@@ -129,6 +130,8 @@ class Command(BaseCommand):
 
         first_entry = Entry.objects.order_by('-created_at').first()
         if first_entry is not None:
+            self._check('记录 change 直连 → 403（查看走抽屉，不可编辑）',
+                        client.get(f'/admin/panel/entry/{first_entry.pk}/change/'), (403,))
             drawer = self._check('记录 · 抽屉 fragment', client.get(f'/admin/panel/entry/{first_entry.pk}/drawer/'))
             if drawer is not None and drawer.status_code == 200:
                 drawer_html = drawer.content.decode('utf-8')
