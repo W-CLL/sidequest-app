@@ -238,6 +238,16 @@ ssh -L 8788:127.0.0.1:8788 root@<服务器IP>
 
 本地联调方式见根目录 `BUILDING.md` 的「Web 版」一节（`scripts/serve-web.mjs` 同源代理）。
 
-**已执行（2026-10-14）**：静态产物在 `/www/sidequest-web/current/`（构建：`flutter build web --release --base-href /app/ --output build/web-app`）；nginx 站点配置备份 `/root/zx.conf.bak-20261014`；主服务单元备份 `/root/sidequest.service.bak-20261014`；全站 gzip 类型增加 `application/wasm`（canvaskit 首载 7.3MB，压缩后传输约三分之一）。生产验证：`/app/` 200、后台冒烟 79/79、无头浏览器实测启动零报错、`GET /api/state` 200。
+**已执行（2026-10-14）**：静态产物在 `/www/sidequest-web/current/`（构建：`flutter build web --release --base-href /app/ --no-web-resources-cdn --output build/web-app`）；nginx 站点配置备份 `/root/zx.conf.bak-20261014`、`/root/zx.conf.bak-20261014b`；主服务单元备份 `/root/sidequest.service.bak-20261014`；全站 gzip 类型增加 `application/wasm`（canvaskit 首载 7.3MB，压缩后传输约三分之一）。生产验证：`/app/` 200、后台冒烟 79/79、无头浏览器实测启动零报错、`GET /api/state` 200。旧版静态产物备份在 `/www/sidequest-web/current.prev-20261014/`（回滚用）。
+
+### 白屏根因修复（2026-10-14 晚）
+
+Flutter Web 发布构建默认从 **gstatic.com（Google CDN）** 拉取 CanvasKit 图形引擎与缺字回退字体；国内网络不可达/极慢时表现为**整页白屏**（引擎起不来），即使引擎起来、中文也依赖 fonts.gstatic.com。修复三件事：
+
+1. **引擎本地化**：构建加 `--no-web-resources-cdn`（buildConfig 中 `useLocalCanvasKit: true`，canvaskit 走 `/app/canvaskit/`）。
+2. **回退字体镜像**：自定义 `web/flutter_bootstrap.js`，`initializeEngine({ fontFallbackBaseUrl: "https://zx.desktoppet.online/app/webfonts/s/" })`；服务器镜像 **555 个回退字体文件**（6 家族：简中 97 / 日 120 / 韩 120 / 繁中 101 / 港 105 / emoji 12，约 15MB）于 `/www/sidequest-web/webfonts/`；nginx 增加 `location /app/webfonts/`（alias + `Access-Control-Allow-Origin: *`，便于本地联调跨源取字体）。文件清单：`server/web-fonts-mirror-list.txt`（由构建产物 `main.dart.js` 中 `A.c("Noto …", "family/vNN/<hash>.<n>.woff2")` 正则提取；Flutter 升级后重新提取并增量下载）。
+3. **启动期重绘驱动**：引擎在回退字体下载完成后不会主动重绘（页面静止时中文会停留在方块字，直到用户第一次触摸/移动）→ `lib/main.dart` 启动后 18 秒内每 300ms `markNeedsPaint + scheduleFrame` 一次（`kIsWeb` 门控，其它平台零影响）。
+
+验证方式（真实 WebKit 引擎 + 屏蔽 gstatic + 零输入）：Playwright `webkit` 打开 `/app/`，`route` 阻断 `gstatic.com|googleapis.com`，截图确认中文正常、0 请求失败。另修复「添加到主屏幕」提示条在非 iOS 设备误显示（`#add-to-home[hidden] { display: none; }`——原 CSS `display:flex` 覆盖了 `hidden` 属性）。
 
 ⚠️ 验收注意：zx 站点有爬虫守卫（`sidequest-bot-guard.conf`，挡 curl/wget/python 等脚本 UA）——**手工 curl 探测必须带浏览器 UA**（例如 `-A "Mozilla/5.0 ..."`），否则一律 403；微信/QQ/浏览器/App 不受影响。

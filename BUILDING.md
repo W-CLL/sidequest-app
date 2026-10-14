@@ -77,9 +77,11 @@ SQLite 测试原生库由依赖的构建钩子下载并校验 SHA-256。网络�
 
 ```powershell
 flutter pub get
-flutter build web --release                    # 本地自测
-flutter build web --release --base-href /app/  # 线上部署形态（见 server/DEPLOY.md 附录）
+flutter build web --release --no-web-resources-cdn                    # 本地自测
+flutter build web --release --base-href /app/ --no-web-resources-cdn  # 线上部署形态（见 server/DEPLOY.md 附录）
 ```
+
+说明：`--no-web-resources-cdn` 把图形引擎（CanvasKit）本地化；缺字回退字体（中文等）由自定义 `web/flutter_bootstrap.js` 指向线上镜像（`/app/webfonts/`）——运行期完全不依赖 Google CDN（国内网络可达性见 server/DEPLOY.md 附录「白屏根因修复」）。
 
 本地联调（保持同源，Cookie 与 Origin 行为与线上一致）：
 
