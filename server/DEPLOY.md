@@ -203,3 +203,37 @@ ssh -L 8788:127.0.0.1:8788 root@<服务器IP>
   `X-Real-IP`——经 nginx 时 socket 都是 127.0.0.1；含 source=wechat/qq/browser、
   referer、via=oss|server）。后台「分发 → 下载统计」聚合展示：今日/累计指标、按天 14 天、
   来源与通道、最近事件（50 条/页）。只统计下载链接的公开访问，App 不采集任何行为数据。
+
+## 附录：Web 版（iOS/浏览器）部署准备（2026-10-14；代码已就绪，待确认后上线）
+
+网页版由同一仓库构建为 Flutter Web 客户端，计划托管在 `https://zx.desktoppet.online/app`
+（同源、无 CORS、复用现有证书）。上线时按以下步骤执行：
+
+1. **本地构建**（仓库根目录）：
+   ```bash
+   flutter build web --release --base-href /app/
+   ```
+   产物在 `build/web/`。
+
+2. **上传静态产物**，例如 `/www/sidequest-web/current/`（先传新目录再切软链，保留上一版便于回滚）。
+
+3. **nginx 增加一个 location**（站点 `zx.desktoppet.online` 的配置里）：
+   ```nginx
+   location = /app { return 301 /app/; }
+   location /app/ {
+       alias /www/sidequest-web/current/;
+       try_files $uri $uri/ /app/index.html;   # 回退必须写站点绝对路径，否则会落到 alias 之外
+   }
+   ```
+
+4. **允许网页版来源**：主服务 systemd 单元加
+   `Environment=ALLOWED_ORIGINS=https://zx.desktoppet.online`（浏览器 POST/PUT 会带 Origin 头，
+   不在列表会 403；安卓 App 请求不带 Origin，不受影响）。并确认服务端代码已包含 Cookie 会话支持。
+
+5. **重启顺序（重要）**：先 `systemctl restart sidequest`（主服务启动时会给旧库补上
+   `sessions.client` 列），再 `systemctl restart sidequest-admin`（后台「登录会话」需要读这列）。
+
+6. 验证：浏览器打开 `https://zx.desktoppet.online/app` → 注册/登录 → 记录一条（含图片）；
+   后台「登录会话」应显示来源「网页 0.2.0+3」。
+
+本地联调方式见根目录 `BUILDING.md` 的「Web 版」一节（`scripts/serve-web.mjs` 同源代理）。

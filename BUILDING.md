@@ -71,6 +71,30 @@ SQLite 测试原生库由依赖的构建钩子下载并校验 SHA-256。网络�
 
 若 Android Studio 使用较新的内置 JDK，本轮可在当前进程将 `JAVA_HOME` 指向已安装的 JDK 21；不需要修改全局 Java 配置。
 
+## Web 版（浏览器 / iOS 主屏幕）
+
+网页版与安卓版共用同一套界面与接口，编译为在线优先客户端：会话用服务端下发的 HttpOnly Cookie，草稿直接存服务端（`/api/draft`），没有本地数据库与后台同步。安卓版离线 + 同步架构不受影响。
+
+```powershell
+flutter pub get
+flutter build web --release                    # 本地自测
+flutter build web --release --base-href /app/  # 线上部署形态（见 server/DEPLOY.md 附录）
+```
+
+本地联调（保持同源，Cookie 与 Origin 行为与线上一致）：
+
+```powershell
+# 终端 A：API —— 把页面来源加入允许列表
+$env:DATABASE_PATH = Join-Path $PWD '.runtime/v0.2/sidequest-v2.sqlite'
+$env:MEDIA_DIRECTORY = Join-Path $PWD '.runtime/v0.2/media'
+$env:ALLOWED_ORIGINS = 'http://127.0.0.1:8080'
+node server/server.mjs
+# 终端 B：静态托管 + /api 反向代理
+node scripts/serve-web.mjs
+```
+
+浏览器打开 `http://127.0.0.1:8080`。说明：网页版不需要 `API_BASE_URL`（同源调用）；媒体先支持图片（视频/语音请在手机端记录）；关闭/刷新页面时若有未保存草稿，浏览器会给出通用离开确认。`flutter run -d chrome` 只适合纯界面调试——跨端口不共享 Cookie，端到端联调请用上面的同源方式。
+
 ## CI
 
 `Checks` 覆盖目录一致性、Flutter analyze、Flutter（含真实 API）测试、Node 集成与真实媒体转换。CI 安装 FFmpeg。

@@ -1,6 +1,6 @@
 # 支线 iOS（Web 版）方案 · 定稿
 
-- 状态：**已定稿，未实施**（2026-10-12）。本文档只确定方案；尚未编写任何代码。
+- 状态：**已实施（本地验证通过，未部署）**（2026-10-12 定稿，2026-10-14 实施）。服务端、后台与 Web 客户端代码均已就绪；线上部署与 iPhone 真机验证待执行。
 - 背景：iOS 真机安装必须经过签名（不同于 Android 可自签名分发）。Web 版 + Safari「添加到主屏幕」可绕过签名、开发者账号与 App Store 审核，是 iPhone 用户使用支线的最轻路径。
 - 方向确认（用户拍板）：去掉本地存储、记录直接经接口保存、登录会话保存在浏览器端。
 
@@ -23,7 +23,7 @@ Web 版是**在线优先**的轻量客户端：不设本地数据库，所有数
 
 ## 二、五个已定稿的决定（按建议默认采纳）
 
-1. **登录会话承载：HttpOnly Cookie**（HttpOnly + Secure + SameSite=Lax，沿用 7 天滑动续期语义）。服务端小改：login/register 响应增加 `Set-Cookie`；`authenticate` 增加一条 cookie 读取路径；logout 清除 cookie。App 的 Bearer 通道不受影响。主屏幕 Web App 与 Safari 共享登录态；清除浏览器数据会掉登录（正常现象）。
+1. **登录会话承载：HttpOnly Cookie**（HttpOnly + Secure + SameSite=Lax，沿用 7 天滑动续期语义）。服务端小改：login/register 响应增加 `Set-Cookie`；`authenticate` 增加一条 cookie 读取路径；logout 清除 cookie。App 的 Bearer 通道不受影响。主屏幕 Web App 与 Safari 通常共享站点数据（若系统将其隔离，首次打开重新登录一次即可）；清除浏览器数据会掉登录（正常现象）。
 2. **草稿：直接使用服务端已有 `/api/draft`**，不引入任何本地存储。断网时输入只存在于页面内存：不刷新不丢；刷新/关页面会丢，关闭前给出提示。不设本地"保险丝"。
 3. **v1 媒体范围：文字 + 图片**；视频、语音留到 v2（服务端媒体白名单已覆盖浏览器常见格式 webm / mp4 / m4a，v2 适配成本低）。
 4. **客户端形态：先验证 Flutter Web 复用现有界面**（"无本地存储 + Cookie 会话"之后，sqflite / flutter_secure_storage / workmanager 三大障碍全部消失）。验证重点：iOS Safari 的中文输入体验、首屏加载、滚动与键盘行为；不达标则退回"轻量独立前端"。
@@ -53,3 +53,11 @@ Web 版是**在线优先**的轻量客户端：不设本地数据库，所有数
 
 - 不做推送通知；不做离线记录；不做视频/语音（v2 再评估）；
 - 不替代 App Store 正式上架路线（如未来需要，另行评估）。
+
+## 七、实施记录（2026-10-14）
+
+- **服务端**：登录/注册下发会话 Cookie（HttpOnly + Secure + SameSite=Lax，7 天滑动续期，续期时自动刷新浏览器端有效期）；`authenticate` 在无 Bearer 时回退 Cookie（Bearer 优先，App 不受影响）；登出/注销清除 Cookie。会话表新增 `client` 列（幂等增量列，旧库启动时自动补），登录/注册时记录一次端标识 `X-Sidequest-Client`（`android/版本`、`web/版本`；不做设备指纹）→ 后台「登录会话」新增「来源」列。
+- **Web 客户端**：与安卓端共用同一套界面代码。新增 `web_repository.dart`（在线优先实现：直接动作接口、Cookie 会话、引导选择仅存页面内存）；平台实现按编译目标二选一（`remote_repository.dart` / `web_repository.dart`），**安卓侧的离线 + 同步逻辑保持不变**。草稿状态文案在 Web 上自动切换为「已保存 / 正在保存」（不再出现「本机」字样）；关闭/刷新页面时若有未保存草稿，浏览器给出通用离开确认。
+- **本地联调**：`scripts/serve-web.mjs`（静态托管 + `/api` 同源代理，Cookie/Origin 行为与线上一致）；本地 API 需以 `ALLOWED_ORIGINS=http://127.0.0.1:8080` 启动。
+- **待办**：线上部署（nginx `/app` 静态托管、`ALLOWED_ORIGINS`、重启顺序——先主服务补列再后台；详见 server/DEPLOY.md 附录）；iPhone 真机验证（中文输入、首屏加载、图片上传、会话保持、添加到主屏幕）。
+- **本地端到端（真实浏览器）已走通**：引导 → 注册（Cookie 落地，`sessions.client` 记录为 `web/0.2.0+3`）→ 开始活动 → 写记录（草稿自动保存到服务端、跨刷新恢复）→ 完成并保存（探索册 +1）；刷新页面会话保持、免重登。网页端文案已按平台切换（不出现「存本机 / 等待同步」等措辞，「同步」入口隐藏）。
