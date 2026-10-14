@@ -1,12 +1,13 @@
 {
     "name": "支线",
     "short_name": "支线",
-    "start_url": ".",
+    "id": "/app/",
+    "start_url": "/app/",
+    "scope": "/app/",
     "display": "standalone",
     "background_color": "#F7F6F0",
     "theme_color": "#234D3C",
     "description": "发现日常的小变化，留下自己的记录。",
-    "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
         {

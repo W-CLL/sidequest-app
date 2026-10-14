@@ -124,6 +124,14 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
+  <!-- 卸掉早期版本注册过的 Service Worker。装到桌面后，旧缓存会绕过已修好的页面，再次白屏。 -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function (regs) {
+        regs.forEach(function (reg) { reg.unregister(); });
+      });
+    }
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 
   <!-- 只在 iPhone/iPad 的 Safari 中弹出一次（可关闭，关掉后记住不再提示） -->
