@@ -1,7 +1,7 @@
 """账号与登录会话：只读页面。
 
 账号删除必须走服务端流程（级联 + 会话失效），后台刻意不提供；
-登录会话只负责展示（区分是否过期），撤销请走服务端流程。
+登录会话只负责展示（区分有效/过期与登录来源），撤销请走服务端流程。
 """
 import time
 
@@ -47,7 +47,7 @@ class UserAdmin(ModelAdmin):
 
 @admin.register(LoginSession)
 class LoginSessionAdmin(ModelAdmin):
-    list_display = ('token_short', 'user', 'expires_cst', 'validity')
+    list_display = ('token_short', 'user', 'source', 'expires_cst', 'validity')
     search_fields = ('user__nickname',)
     ordering = ('-expires_at',)
     list_per_page = 50
@@ -67,6 +67,15 @@ class LoginSessionAdmin(ModelAdmin):
     @admin.display(description='令牌哈希')
     def token_short(self, obj):
         return short(obj.token_hash, 12)
+
+    @admin.display(description='来源')
+    def source(self, obj):
+        value = (obj.client or '').strip()
+        if not value:
+            return '—'
+        platform, _, version = value.partition('/')
+        label = {'android': '应用 · 安卓', 'web': '网页'}.get(platform, platform)
+        return f'{label} {version}'.strip()
 
     @admin.display(description='过期时间')
     def expires_cst(self, obj):

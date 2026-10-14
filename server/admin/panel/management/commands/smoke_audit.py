@@ -101,7 +101,9 @@ class Command(BaseCommand):
         self._check('指令回执列表', client.get('/admin/panel/commandreceipt/'))
         self._check('删除墓碑列表', client.get('/admin/panel/entrytombstone/'))
         self._check('媒体清理队列', client.get('/admin/panel/mediacleanup/'))
-        self._check('登录会话列表', client.get('/admin/panel/loginsession/'))
+        sessions_page = self._check('登录会话列表', client.get('/admin/panel/loginsession/'))
+        if sessions_page is not None and sessions_page.status_code == 200:
+            self._flag('来源' in sessions_page.content.decode('utf-8'), '  └ 会话列表含「来源」列', '来源')
         self._check('服务端元数据', client.get('/admin/panel/servermetadata/'))
         self._check('客户端报错列表', client.get('/admin/panel/clientdiagnostic/'))
         self._check('客户端报错 change 直连 → 403', client.get('/admin/panel/clientdiagnostic/any/change/'), (403,))

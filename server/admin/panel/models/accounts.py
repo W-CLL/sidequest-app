@@ -34,6 +34,7 @@ class LoginSession(models.Model):
         verbose_name='账号',
     )
     expires_at = models.BigIntegerField(verbose_name='过期时间(epoch ms)')
+    client = models.TextField(blank=True, default='', verbose_name='登录来源')
 
     class Meta:
         managed = False
