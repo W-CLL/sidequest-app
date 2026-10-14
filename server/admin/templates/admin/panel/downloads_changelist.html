@@ -1,0 +1,107 @@
+{% extends 'admin/base.html' %}
+{% load i18n %}
+
+{% block title %}下载统计 | {{ site_title }}{% endblock %}
+
+{% block branding %}{% include "unfold/helpers/site_branding.html" %}{% endblock %}
+
+{% block extrastyle %}
+    {{ block.super }}
+    {{ media.css }}
+{% endblock %}
+
+{% block extrahead %}
+    {{ block.super }}
+    {{ media.js }}
+{% endblock %}
+
+{% block content %}
+<div class="sq-wrap">
+  <div class="sq-head">
+    <h1>下载统计</h1>
+    <span class="sq-badge sq-badge-strong">累计 {{ summary.page }} 次访问 · {{ summary.apk }} 次下载</span>
+    <span class="sq-badge">只统计下载链接的公开访问，不涉及 App 内任何数据</span>
+  </div>
+
+  <div class="sq-stats">
+    <div class="sq-stat"><span>今日访问</span><b>{{ summary.today_page }}</b></div>
+    <div class="sq-stat"><span>今日下载</span><b>{{ summary.today_apk }}</b></div>
+    <div class="sq-stat"><span>今日访客</span><b>{{ summary.today_visitors }}</b></div>
+    <div class="sq-stat"><span>累计访问</span><b>{{ summary.page }}</b></div>
+    <div class="sq-stat"><span>累计下载</span><b>{{ summary.apk }}</b></div>
+    <div class="sq-stat"><span>累计访客</span><b>{{ summary.visitors }}</b></div>
+  </div>
+
+  <div class="sq-card">
+    <h2 class="sq-section">按天（最近 14 天 · 北京时间）</h2>
+    <table class="sq-table">
+      <thead>
+        <tr><th class="nowrap">日期</th><th>访问</th><th>下载</th><th>从下载页点入</th><th>独立访客</th></tr>
+      </thead>
+      <tbody>
+      {% for row in daily_rows %}
+        <tr>
+          <td class="nowrap">{{ row.date }}</td>
+          <td>{{ row.page }}</td>
+          <td>{{ row.apk }}</td>
+          <td>{{ row.from_page }}</td>
+          <td>{{ row.visitors }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="sq-empty">还没有统计数据——有人打开下载页或点下载后，这里开始计数。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="sq-card">
+    <h2 class="sq-section">下载来源与分发通道</h2>
+    <p class="sq-sub">通道：OSS {{ summary.oss }} 次 · 服务器带宽 {{ summary.server }} 次</p>
+    <table class="sq-table">
+      <thead><tr><th>来源（按设备识别）</th><th>下载次数</th></tr></thead>
+      <tbody>
+      {% for row in source_rows %}
+        <tr><td>{{ row.label }}</td><td>{{ row.count }}</td></tr>
+      {% empty %}
+        <tr><td colspan="2" class="sq-empty">—</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="sq-card">
+    <h2 class="sq-section">最近事件</h2>
+    <table class="sq-table">
+      <thead>
+        <tr><th class="nowrap">时间</th><th class="nowrap">类型</th><th class="nowrap">通道</th><th class="nowrap">来源</th><th class="nowrap">IP</th><th>设备</th></tr>
+      </thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td class="nowrap">{{ row.at_label }}</td>
+          <td class="nowrap">{{ row.kind }}</td>
+          <td class="nowrap">{{ row.via_label|default:'—' }}</td>
+          <td class="nowrap">{{ row.referer_label }}</td>
+          <td class="nowrap">{{ row.ip|default:'—' }}</td>
+          <td class="sq-sub">{{ row.ua|default:'—' }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="6" class="sq-empty">还没有事件。数据文件：{{ source_path }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="sq-pager">
+      <div class="sq-pager-info">第 {{ page_start }}–{{ page_end }} 条 / 共 {{ total }} 条</div>
+      <div class="sq-pager-pages">
+        {% if page > 1 %}<a href="?page={{ page|add:'-1' }}" title="上一页">‹</a>{% else %}<span class="disabled">‹</span>{% endif %}
+        {% for item in page_items %}
+          {% if item == '…' %}<span class="dots">…</span>
+          {% elif item == page %}<span class="current">{{ item }}</span>
+          {% else %}<a href="?page={{ item }}">{{ item }}</a>{% endif %}
+        {% endfor %}
+        {% if page < total_pages %}<a href="?page={{ page|add:'1' }}" title="下一页">›</a>{% else %}<span class="disabled">›</span>{% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

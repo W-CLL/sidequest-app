@@ -1,0 +1,48 @@
+{% extends 'admin/base.html' %}
+{% load i18n %}
+
+{% block title %}客户端报错 | {{ site_title }}{% endblock %}
+
+{% block branding %}{% include "unfold/helpers/site_branding.html" %}{% endblock %}
+
+{% block extrastyle %}
+    {{ block.super }}
+    {{ media.css }}
+{% endblock %}
+
+{% block extrahead %}
+    {{ block.super }}
+    {{ media.js }}
+{% endblock %}
+
+{% block content %}
+<div class="sq-wrap">
+  <div class="sq-head">
+    <h1>客户端报错</h1>
+    <span class="sq-badge sq-badge-strong">最近 {{ total_shown }} 条</span>
+    <span class="sq-badge">客户端遇到问题时自动上报，用户无感知</span>
+  </div>
+
+  <div class="sq-card">
+    <table class="sq-table">
+      <thead>
+        <tr><th class="nowrap">时间</th><th>账号</th><th>位置</th><th class="nowrap">类型</th><th>详情</th><th class="nowrap">来源</th></tr>
+      </thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td class="nowrap">{{ row.at|default:'—' }}</td>
+          <td>{{ row.account_label|default:'未登录'|default_if_none:'未登录' }}</td>
+          <td><span class="sq-chip">{{ row.scope|default:'—' }}</span></td>
+          <td class="nowrap">{{ row.type|default:'—' }}</td>
+          <td class="sq-sub">{{ row.message|default:'—' }}</td>
+          <td class="nowrap">{{ row.client|default:'—' }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="6" class="sq-empty">还没有收到客户端上报。客户端遇到问题时会把技术细节送到这里（用户无感知）。存储位置：{{ source_path }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

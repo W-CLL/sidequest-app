@@ -1,0 +1,11 @@
+{% comment %}记录抽屉 fragment（入口：/admin/panel/entry/<id>/drawer/，由 record_drawer.js 注入抽屉）{% endcomment %}
+<div class="sqr-meta">
+    <div class="sqr-meta-row"><span class="sqr-k">账号</span><span class="sqr-v">{{ user_nick }}</span></div>
+    <div class="sqr-meta-row"><span class="sqr-k">活动</span><span class="sqr-v">{{ entry.quest_title }} <span class="sqr-id">{{ entry.quest_id }}</span></span></div>
+    <div class="sqr-meta-row"><span class="sqr-k">创建时间</span><span class="sqr-v">{{ created_cst }}</span></div>
+    <div class="sqr-meta-row"><span class="sqr-k">记录 ID</span><span class="sqr-v sqr-id">{{ entry.id }}</span></div>
+</div>
+<div class="sqr-section-title">记录内容</div>
+<div class="sqr-text">{{ entry.text }}</div>
+<div class="sqr-section-title">媒体（{{ media_count }}）</div>
+<div class="sqr-media">{{ media_html }}</div>

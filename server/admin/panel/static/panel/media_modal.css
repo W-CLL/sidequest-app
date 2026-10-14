@@ -1,0 +1,86 @@
+/* 支线管理后台：媒体灯箱弹窗样式 */
+.sq-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(12, 17, 14, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+}
+
+.sq-inner {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    max-width: 96vw;
+    max-height: 92vh;
+}
+
+.sq-content img,
+.sq-content video {
+    max-width: 94vw;
+    max-height: 86vh;
+    border-radius: 12px;
+    display: block;
+    background: #000;
+}
+
+.sq-content audio {
+    width: min(560px, 90vw);
+}
+
+.sq-close,
+.sq-nav {
+    position: absolute;
+    border: none;
+    cursor: pointer;
+    color: #10241c;
+    background: rgba(255, 255, 255, 0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+
+.sq-close {
+    top: 10px;
+    right: 10px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    font-size: 15px;
+    z-index: 3;
+}
+
+.sq-nav {
+    top: 50%;
+    transform: translateY(-50%);
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    font-size: 22px;
+    z-index: 3;
+}
+
+.sq-prev {
+    left: 10px;
+}
+
+.sq-next {
+    right: 10px;
+}
+
+.sq-counter {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(16, 36, 28, 0.75);
+    color: #e8efe4;
+    font-size: 13px;
+    padding: 3px 12px;
+    border-radius: 999px;
+}

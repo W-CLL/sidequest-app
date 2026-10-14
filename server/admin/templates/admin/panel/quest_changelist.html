@@ -1,0 +1,158 @@
+{% extends 'admin/base.html' %}
+{% load i18n %}
+
+{% block title %}探索任务 | {{ site_title }}{% endblock %}
+
+{% block branding %}{% include "unfold/helpers/site_branding.html" %}{% endblock %}
+
+{% block extrastyle %}
+    {{ block.super }}
+    {{ media.css }}
+{% endblock %}
+
+{% block extrahead %}
+    {{ block.super }}
+    {{ media.js }}
+{% endblock %}
+
+{% block content %}
+{{ quests_json|json_script:"sq-quests-data" }}
+{{ roles_json|json_script:"sq-roles-data" }}
+
+<div class="sq-wrap">
+  {% if flash %}<div class="sq-flash">{{ flash }}</div>{% endif %}
+  {% if error %}<div class="sq-flash sq-flash-error">{{ error }}</div>{% endif %}
+
+  <div class="sq-head">
+    <h1>探索任务目录</h1>
+    <span class="sq-badge sq-badge-strong">共 {{ catalog_total }} 条</span>
+    {% if disabled_count %}<span class="sq-badge sq-badge-warn">已停用 {{ disabled_count }}</span>{% endif %}
+    {% for name, count in category_counts %}<span class="sq-badge">{{ name }} {{ count }}</span>{% endfor %}
+    <form class="sq-search" method="get">
+      <input type="text" name="q" value="{{ q }}" placeholder="搜索 ID / 标题 / 描述">
+      <button type="submit">搜索</button>
+    </form>
+    <a class="sq-btn ghost" href="{% url 'admin:panel_quest_backups' %}">备份与回滚</a>
+    <a class="sq-btn" href="?drawer=add{% if q %}&q={{ q|urlencode }}{% endif %}" data-sq-drawer="add">＋ 新增</a>
+  </div>
+
+  <div class="sq-card">
+    <table class="sq-table">
+      <thead>
+        <tr><th class="num">#</th><th>任务</th><th>分类</th><th>时长</th><th>偏好标签</th><th class="nowrap">操作</th></tr>
+      </thead>
+      <tbody>
+      {% for quest in quests %}
+        <tr{% if not quest.is_enabled %} class="sq-row-off"{% endif %}>
+          <td class="num">{{ quest.position }}</td>
+          <td>
+            <div class="sq-title">{{ quest.title }}{% if not quest.is_enabled %}<span class="sq-off-badge">已停用</span>{% endif %}{% if quest.locked %}<span class="sq-off-badge" title="原始任务：顺序被生成脚本锁定">原始</span>{% endif %}</div>
+            <div class="sq-sub">{{ quest.id }} · {{ quest.subtitle }}</div>
+          </td>
+          <td><span class="sq-chip">{{ quest.category }}</span></td>
+          <td class="nowrap">{{ quest.minutes }} 分钟</td>
+          <td class="sq-tags">{% for tag in quest.preferenceTags %}<span>{{ tag }}</span>{% endfor %}</td>
+          <td class="ops nowrap">
+            <a href="?drawer=view:{{ quest.id }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if page > 1 %}&page={{ page }}{% endif %}"
+               data-sq-drawer="view" data-sq-id="{{ quest.id }}">查看</a>
+            <a href="?drawer=edit:{{ quest.id }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if page > 1 %}&page={{ page }}{% endif %}"
+               data-sq-drawer="edit" data-sq-id="{{ quest.id }}">编辑</a>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="6" class="sq-empty">没有匹配的任务</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="sq-pager">
+      <div class="sq-pager-info">第 {{ page_start }}–{{ page_end }} 条 / 共 {{ total }} 条</div>
+      <div class="sq-pager-pages">
+        {% if page > 1 %}
+          <a href="?page={{ page|add:'-1' }}{% if q %}&q={{ q|urlencode }}{% endif %}" title="上一页">‹</a>
+        {% else %}<span class="disabled">‹</span>{% endif %}
+        {% for item in page_items %}
+          {% if item == '…' %}<span class="dots">…</span>
+          {% elif item == page %}<span class="current">{{ item }}</span>
+          {% else %}<a href="?page={{ item }}{% if q %}&q={{ q|urlencode }}{% endif %}">{{ item }}</a>{% endif %}
+        {% endfor %}
+        {% if page < total_pages %}
+          <a href="?page={{ page|add:'1' }}{% if q %}&q={{ q|urlencode }}{% endif %}" title="下一页">›</a>
+        {% else %}<span class="disabled">›</span>{% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="sq-drawer-backdrop" data-open=""></div>
+<aside id="sq-drawer"
+       data-open="{% if drawer_mode %}{{ drawer_mode }}{% endif %}"
+       data-id="{{ drawer_id }}"
+       data-form-bound="{% if form_bound %}1{% else %}0{% endif %}"
+       data-original-count="{{ original_count }}"
+       data-add-url="{% url 'admin:panel_quest_add' %}"
+       data-edit-template="{% url 'admin:panel_quest_edit' quest_id='__ID__' %}"
+       data-toggle-template="{% url 'admin:panel_quest_toggle' quest_id='__ID__' %}"
+       data-move-template="{% url 'admin:panel_quest_move' quest_id='__ID__' %}">
+  <div class="sqd-head">
+    <h2 id="sq-drawer-heading">探索任务</h2>
+    <button type="button" class="sqd-close" data-sq-close aria-label="关闭">✕</button>
+  </div>
+  <div class="sqd-body">
+    {% if drawer_error %}<div class="sqd-error">{{ drawer_error }}</div>{% endif %}
+
+    <div id="sq-drawer-view"></div>
+    <div id="sq-drawer-view-actions" class="sqd-actions" style="display: none">
+      <button type="button" class="sqd-btn ghost" data-sq-close>关闭</button>
+      <button type="button" class="sqd-btn ghost" id="sqd-toggle-btn" data-sq-quick="toggle">停用此任务</button>
+      <button type="button" class="sqd-btn ghost" id="sqd-move-up" data-sq-quick="move-up">↑ 上移</button>
+      <button type="button" class="sqd-btn ghost" id="sqd-move-down" data-sq-quick="move-down">↓ 下移</button>
+      <button type="button" class="sqd-btn" data-sq-drawer="edit" id="sq-drawer-edit-btn">编辑此任务</button>
+    </div>
+    <div id="sqd-locked-note" class="sqd-locked" style="display: none">原始任务：顺序由生成脚本锁定，不能调整；可停用或编辑内容。</div>
+
+    <div id="sq-drawer-preview" class="sqd-preview" style="display: none"></div>
+
+    <form id="sq-drawer-form" method="post" action="{% url 'admin:panel_quest_add' %}" style="display: none">
+      {% csrf_token %}
+      <input type="hidden" name="q" value="{{ q }}">
+      <input type="hidden" name="page" value="{{ page }}">
+      {{ drawer_form.non_field_errors }}
+
+      <div class="sqd-section">基本信息</div>
+      <div class="sqd-grid">
+        <div class="sqd-field">{{ drawer_form.quest_id.label_tag }}{{ drawer_form.quest_id }}{{ drawer_form.quest_id.errors }}<span class="helptext">{{ drawer_form.quest_id.help_text }}</span></div>
+        <div class="sqd-field">{{ drawer_form.category.label_tag }}{{ drawer_form.category }}{{ drawer_form.category.errors }}</div>
+        <div class="sqd-field">{{ drawer_form.minutes.label_tag }}{{ drawer_form.minutes }}{{ drawer_form.minutes.errors }}</div>
+      </div>
+      <div class="sqd-field">{{ drawer_form.title.label_tag }}{{ drawer_form.title }}{{ drawer_form.title.errors }}</div>
+      <div class="sqd-field">{{ drawer_form.subtitle.label_tag }}{{ drawer_form.subtitle }}{{ drawer_form.subtitle.errors }}</div>
+      <div class="sqd-field sqd-check-field">{{ drawer_form.enabled }}{{ drawer_form.enabled.label_tag }}<span class="helptext">{{ drawer_form.enabled.help_text }}</span></div>
+
+      <div class="sqd-section">步骤与提示</div>
+      <div class="sqd-field">{{ drawer_form.step_1.label_tag }}{{ drawer_form.step_1 }}{{ drawer_form.step_1.errors }}</div>
+      <div class="sqd-field">{{ drawer_form.step_2.label_tag }}{{ drawer_form.step_2 }}{{ drawer_form.step_2.errors }}</div>
+      <div class="sqd-field">{{ drawer_form.step_3.label_tag }}{{ drawer_form.step_3 }}{{ drawer_form.step_3.errors }}</div>
+      <div class="sqd-field">{{ drawer_form.hint.label_tag }}{{ drawer_form.hint }}{{ drawer_form.hint.errors }}</div>
+
+      <div class="sqd-section">偏好标签（至少 1 个）</div>
+      <div class="sqd-checks">{{ drawer_form.preference_tags }}{{ drawer_form.preference_tags.errors }}</div>
+
+      <div class="sqd-section">角色提示（可选，留空 = 该角色不显示专属提示）</div>
+      {% for field in role_fields %}
+        <div class="sqd-field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>
+      {% endfor %}
+
+      <div class="sqd-actions">
+        <button type="button" class="sqd-btn ghost" data-sq-close>取消</button>
+        <button type="submit" class="sqd-btn">保存并重新生成目录</button>
+      </div>
+    </form>
+
+    <form id="sqd-quick-form" method="post" style="display: none">
+      {% csrf_token %}
+      <input type="hidden" name="dir" value="">
+    </form>
+  </div>
+</aside>
+{% endblock %}

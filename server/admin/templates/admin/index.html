@@ -1,0 +1,55 @@
+{% extends 'admin/base.html' %}
+{% load i18n unfold %}
+
+{% block title %}{% if subtitle %}{{ subtitle }} | {% endif %}仪表盘 | {{ site_title|default:_('Django site title') }}{% endblock %}
+
+{% block branding %}
+    {% include "unfold/helpers/site_branding.html" %}
+{% endblock %}
+
+{% block content %}
+    <div class="flex flex-col gap-6 pt-6">
+        <div class="flex flex-col lg:flex-row gap-6">
+            {% component "unfold/components/card.html" with title="账号" title_icon="group" class="grow" %}
+                <div class="text-2xl font-bold tracking-tight">{{ sq_stats.users }}</div>
+                <div class="mt-1 text-sm text-subtle">注册账号总数</div>
+            {% endcomponent %}
+
+            {% component "unfold/components/card.html" with title="记录" title_icon="menu_book" class="grow" %}
+                <div class="text-2xl font-bold tracking-tight">{{ sq_stats.entries }}</div>
+                <div class="mt-1 text-sm text-subtle">探索记录总数</div>
+            {% endcomponent %}
+
+            {% component "unfold/components/card.html" with title="媒体文件" title_icon="perm_media" class="grow" %}
+                <div class="text-2xl font-bold tracking-tight">{{ sq_stats.media_ready }}</div>
+                <div class="mt-1 text-sm text-subtle">已就绪 / 共 {{ sq_stats.media_total }} 个</div>
+            {% endcomponent %}
+
+            {% component "unfold/components/card.html" with title="异常媒体" title_icon="error" class="grow" %}
+                <div class="text-2xl font-bold tracking-tight">{{ sq_stats.media_failed }}</div>
+                <div class="mt-1 text-sm text-subtle">处理失败待排查</div>
+            {% endcomponent %}
+        </div>
+
+        {% component "unfold/components/card.html" with title="最近 7 天新记录" title_icon="bar_chart" %}
+            {% component "unfold/components/chart/bar.html" with data=sq_chart height=220 %}{% endcomponent %}
+        {% endcomponent %}
+
+        {% component "unfold/components/card.html" with title="最新记录" title_icon="schedule" %}
+            <div class="flex flex-col">
+                {% for row in sq_recent %}
+                    <div class="flex items-center gap-3 py-4 border-b border-base-200">
+                        <div class="flex flex-col grow min-w-0">
+                            <a class="text-primary-600" href="/admin/panel/entry/{{ row.id }}/change/">{{ row.title }}</a>
+                            <span class="text-sm text-subtle">{{ row.text }}</span>
+                        </div>
+                        <span class="text-sm text-base-400 shrink-0">{{ row.user }}</span>
+                        <span class="text-sm text-base-400 shrink-0">{{ row.time }}</span>
+                    </div>
+                {% empty %}
+                    <div class="py-4 text-subtle">还没有记录</div>
+                {% endfor %}
+            </div>
+        {% endcomponent %}
+    </div>
+{% endblock %}

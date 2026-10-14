@@ -1,0 +1,66 @@
+{% extends 'admin/base.html' %}
+{% load i18n %}
+
+{% block title %}探索任务备份 | {{ site_title }}{% endblock %}
+
+{% block branding %}{% include "unfold/helpers/site_branding.html" %}{% endblock %}
+
+{% block extrastyle %}
+    {{ block.super }}
+    {{ media.css }}
+{% endblock %}
+
+{% block extrahead %}
+    {{ block.super }}
+    {{ media.js }}
+{% endblock %}
+
+{% block content %}
+<div class="sq-wrap">
+  {% if flash %}<div class="sq-flash">{{ flash }}</div>{% endif %}
+  {% if error %}<div class="sq-flash sq-flash-error">{{ error }}</div>{% endif %}
+
+  <div class="sq-head">
+    <h1>探索任务 · 备份与回滚</h1>
+    <span class="sq-badge sq-badge-strong">当前目录 {{ catalog_total }} 条</span>
+    <div style="margin-left:auto; display:flex; gap:8px;">
+      <form method="post" action="{% url 'admin:panel_quest_backup_manual' %}">{% csrf_token %}
+        <button type="submit" class="sq-btn">立即备份</button>
+      </form>
+      <a class="sq-btn ghost" href="{% url 'admin:panel_quest_changelist' %}">← 返回任务列表</a>
+    </div>
+  </div>
+
+  <p class="sq-hint">每次目录改动（新增 / 编辑 / 停用 / 排序 / 恢复）前会自动落盘一份备份；仅保留最近 {{ keep }} 份。
+    恢复同样先备份当前状态再做替换，生成脚本校验失败会自动回滚。备份目录：<code>{{ backup_dir }}</code></p>
+
+  <div class="sq-card">
+    <table class="sq-table">
+      <thead>
+        <tr><th>时间</th><th>来源</th><th>条目数</th><th>其中停用</th><th>大小</th><th>操作</th></tr>
+      </thead>
+      <tbody>
+      {% for row in backups %}
+        <tr>
+          <td class="nowrap">{{ row.at }}</td>
+          <td>{{ row.reason_label }}</td>
+          <td>{{ row.count|default_if_none:'—' }}</td>
+          <td>{{ row.disabled|default_if_none:'—' }}</td>
+          <td class="nowrap">{{ row.size }} B</td>
+          <td class="ops nowrap">
+            <a href="{% url 'admin:panel_quest_backup_download' name=row.name %}">下载</a>
+            <form method="post" action="{% url 'admin:panel_quest_backup_restore' name=row.name %}"
+                  onsubmit="return confirm('确定用此备份整体替换当前目录？当前状态会先自动备份，生成脚本校验失败会自动回滚。');">
+              {% csrf_token %}
+              <button type="submit" class="sq-linkbtn">恢复此备份</button>
+            </form>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="6" class="sq-empty">还没有备份（下次目录改动或点「立即备份」时生成）</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

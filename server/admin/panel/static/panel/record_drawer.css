@@ -1,0 +1,174 @@
+/* 支线管理后台：记录抽屉（记录列表「查看」→ 右侧抽屉展示内容与媒体）
+ * 颜色走本文件主题层变量（--sqr-*，:root 浅色 / html.dark 深色，取值对齐 unfold）。
+ * 仅作用于记录抽屉自身，不修改 unfold 列表页其他样式。 */
+:root {
+    --sqr-surface: #ffffff;
+    --sqr-surface-muted: #fafaf4;
+    --sqr-border: #e6e3d5;
+    --sqr-text: #203b31;
+    --sqr-text-body: #3c4a40;
+    --sqr-text-subtle: #69756c;
+    --sqr-text-faint: #8a948c;
+    --sqr-chip-bg: #eef1e6;
+    --sqr-chip-text: #234d3c;
+    --sqr-error-bg: #fdeceb;
+    --sqr-error-border: #f3b6b0;
+    --sqr-error-text: #b42318;
+    --sqr-drawer-shadow: rgba(16, 36, 28, 0.18);
+}
+
+html.dark {
+    --sqr-surface: var(--color-base-900, #1c1c1e);
+    --sqr-surface-muted: var(--color-base-800, #2c2c2e);
+    --sqr-border: var(--color-base-800, #2c2c2e);
+    --sqr-text: var(--color-base-50, #f5f5f5);
+    --sqr-text-body: var(--color-base-300, #d4d4d8);
+    --sqr-text-subtle: var(--color-base-400, #a1a1aa);
+    --sqr-text-faint: var(--color-base-500, #71717a);
+    --sqr-chip-bg: var(--color-base-800, #2c2c2e);
+    --sqr-chip-text: var(--color-base-200, #e4e4e7);
+    --sqr-error-bg: rgba(180, 35, 24, 0.22);
+    --sqr-error-border: rgba(244, 63, 94, 0.36);
+    --sqr-error-text: #f4a3a3;
+    --sqr-drawer-shadow: rgba(0, 0, 0, 0.5);
+}
+
+#sq-record-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 18, 0.45);
+    z-index: 9986;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease;
+}
+
+#sq-record-backdrop[data-open="1"] {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+#sq-record-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
+    width: min(560px, 94vw);
+    background: var(--sqr-surface);
+    color: var(--sqr-text);
+    border-left: 1px solid var(--sqr-border);
+    z-index: 9987;
+    box-shadow: -18px 0 42px var(--sqr-drawer-shadow);
+    transform: translateX(104%);
+    transition: transform 0.22s ease;
+    display: flex;
+    flex-direction: column;
+}
+
+#sq-record-drawer[data-open="1"] {
+    transform: translateX(0);
+}
+
+.sqr-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--sqr-border);
+    flex-shrink: 0;
+}
+
+.sqr-head h2 {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0;
+    flex: 1;
+    color: var(--sqr-text);
+}
+
+.sqr-close {
+    border: none;
+    background: var(--sqr-chip-bg);
+    color: var(--sqr-chip-text);
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.sqr-close:hover {
+    filter: brightness(0.96);
+}
+
+.sqr-body {
+    padding: 16px 20px 28px;
+    overflow-y: auto;
+}
+
+.sqr-loading {
+    color: var(--sqr-text-subtle);
+    font-size: 13px;
+    padding: 28px 0;
+    text-align: center;
+}
+
+.sqr-error {
+    background: var(--sqr-error-bg);
+    border: 1px solid var(--sqr-error-border);
+    color: var(--sqr-error-text);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 13px;
+}
+
+.sqr-meta {
+    border: 1px solid var(--sqr-border);
+    border-radius: 10px;
+    background: var(--sqr-surface-muted);
+    padding: 10px 14px;
+    margin-bottom: 16px;
+}
+
+.sqr-meta-row {
+    display: flex;
+    gap: 10px;
+    font-size: 13px;
+    line-height: 1.8;
+}
+
+.sqr-k {
+    color: var(--sqr-text-subtle);
+    flex: none;
+    width: 60px;
+}
+
+.sqr-v {
+    color: var(--sqr-text-body);
+    word-break: break-all;
+}
+
+.sqr-id {
+    color: var(--sqr-text-faint);
+    font-size: 12px;
+}
+
+.sqr-section-title {
+    font-size: 12.5px;
+    color: var(--sqr-text-subtle);
+    font-weight: 600;
+    margin: 18px 0 8px;
+}
+
+.sqr-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.8;
+    font-size: 14px;
+    color: var(--sqr-text);
+}
+
+.sqr-media {
+    align-items: center;
+}

@@ -1,0 +1,70 @@
+{% extends 'admin/base.html' %}
+{% load i18n %}
+
+{% block title %}版本分发 | {{ site_title }}{% endblock %}
+
+{% block branding %}{% include "unfold/helpers/site_branding.html" %}{% endblock %}
+
+{% block extrastyle %}
+    {{ block.super }}
+    {{ media.css }}
+{% endblock %}
+
+{% block extrahead %}
+    {{ block.super }}
+    {{ media.js }}
+{% endblock %}
+
+{% block content %}
+<div class="sq-wrap">
+  {% if flash %}<div class="sq-flash">{{ flash }}</div>{% endif %}
+  {% if error %}<div class="sq-flash sq-flash-error">{{ error }}</div>{% endif %}
+
+  <div class="sq-head">
+    <h1>版本分发</h1>
+    <span class="sq-badge sq-badge-strong">{{ apks|length }} 个包</span>
+    <span class="sq-badge">下载链接始终指向最新上传的一个</span>
+  </div>
+
+  <form class="sq-form" method="post" enctype="multipart/form-data" action="{% url 'admin:panel_apkrelease_upload' %}">
+    {% csrf_token %}
+    <input type="file" name="apk" accept=".apk" required>
+    <button type="submit">上传新版本</button>
+    <span class="sq-hint">上传后无需其它操作，下载页自动切换到新包。</span>
+  </form>
+
+  {% if download_page_url %}
+    <p class="sq-hint">对外下载页：<a href="{{ download_page_url }}" target="_blank" rel="noreferrer"><code class="sq-code">{{ download_page_url }}</code></a>
+      　直链：<code class="sq-code">{{ download_latest_url }}</code>（把这两个链接发给用户即可）</p>
+  {% else %}
+    <p class="sq-hint">提示：设置环境变量 <code class="sq-code">SIDEQUEST_PUBLIC_BASE_URL</code>（如 <code class="sq-code">https://zx.你的域名.com</code>）后，这里会直接显示可分享的下载链接。</p>
+  {% endif %}
+
+  <div class="sq-card">
+    <table class="sq-table">
+      <thead>
+        <tr><th>安装包</th><th class="nowrap">大小</th><th class="nowrap">更新时间</th><th class="nowrap">操作</th></tr>
+      </thead>
+      <tbody>
+      {% for apk in apks %}
+        <tr>
+          <td>
+            <div class="sq-title">{{ apk.name }}{% if apk.is_current %}<span class="sq-current-badge">当前</span>{% endif %}</div>
+          </td>
+          <td class="nowrap">{{ apk.size_label }}</td>
+          <td class="nowrap">{{ apk.updated }}</td>
+          <td class="ops nowrap">
+            <form method="post" action="{% url 'admin:panel_apkrelease_delete' apk.name %}" onsubmit="return confirm('删除 {{ apk.name|escapejs }}？');">
+              {% csrf_token %}
+              <button type="submit" class="sq-danger">删除</button>
+            </form>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="4" class="sq-empty">还没有安装包。用上面的表单上传第一个（目录：{{ apk_dir }}）</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
