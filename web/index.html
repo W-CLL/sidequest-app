@@ -53,6 +53,9 @@
   </script>
 
   <style>
+    /* 宽屏时 Flutter 画布两侧的留边色与页面底色一致（见 lib/widgets.dart 的 stage） */
+    body { margin: 0; background: #E9E6DA; }
+
     /* 启动画面：首帧渲染前替代白屏，渲染后由 flutter_bootstrap.js 移除 */
     #boot-splash {
       position: fixed; inset: 0; z-index: 50;

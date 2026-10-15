@@ -102,6 +102,10 @@ class SideQuestApp extends StatelessWidget {
         indicatorColor: lime,
       ),
     ),
+    builder: kIsWeb
+        ? (context, child) =>
+              PortraitStage(child: child ?? const SizedBox.shrink())
+        : null,
     home: repository.isConfigured
         ? QuestHome(repository: repository)
         : const ConfigurationPage(),

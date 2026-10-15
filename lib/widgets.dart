@@ -7,6 +7,8 @@ const lime = Color(0xFFDFECAC);
 const pale = Color(0xFFEEF1E6);
 const muted = Color(0xFF69756C);
 const border = Color(0xFFE2E6DB);
+/// 宽屏留边色（比 paper 略深一档的暖灰绿，衬托竖屏列）
+const stage = Color(0xFFE9E6DA);
 const heading = TextStyle(
   fontSize: 27,
   height: 1.25,
@@ -269,4 +271,50 @@ class _BotanicalPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// 网页版竖屏舞台：窗口比手机宽（电脑、平板、横屏窗口）时，把界面收成一列
+/// 手机宽度的竖屏、两侧留边；手机宽度以内原样铺满。仅网页版接入（见 main.dart）。
+class PortraitStage extends StatelessWidget {
+  const PortraitStage({super.key, required this.child, this.maxWidth = 430});
+
+  final Widget child;
+  final double maxWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth <= maxWidth) return child;
+        final media = MediaQuery.of(context);
+        return ColoredBox(
+          color: stage,
+          child: Center(
+            child: SizedBox(
+              width: maxWidth,
+              height: constraints.maxHeight,
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  color: paper,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Color(0x1F203B31),
+                      blurRadius: 18,
+                      spreadRadius: 1,
+                    ),
+                  ],
+                ),
+                child: MediaQuery(
+                  data: media.copyWith(
+                    size: Size(maxWidth, constraints.maxHeight),
+                  ),
+                  child: child,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
