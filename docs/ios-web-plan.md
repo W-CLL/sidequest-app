@@ -62,4 +62,5 @@ Web 版是**在线优先**的轻量客户端：不设本地数据库，所有数
 - **线上部署已完成（2026-10-14）**：nginx `/app` 静态托管（产物在 `/www/sidequest-web/current/`）、主服务 `ALLOWED_ORIGINS=https://zx.desktoppet.online`、按"先主服务补列再重启后台"顺序完成；下载页 `/download` 新增「iPhone / 电脑 → 打开网页版」入口（与「安卓手机 → 下载安卓版本」并列）。生产验证：`/app/` 200、后台冒烟 79/79、无头浏览器实测零报错、`GET /api/state` 200。
 - **依赖治理（2026-10-14 晚，白屏根因修复）**：运行期不再依赖 Google CDN——CanvasKit 本地化（`--no-web-resources-cdn`）；缺字回退字体（中文等）经 `web/flutter_bootstrap.js` 的 `fontFallbackBaseUrl` 指向本服务器镜像（`/app/webfonts/s/`，555 文件 / 6 家族，清单见 `server/web-fonts-mirror-list.txt`）；`lib/main.dart` 启动期 18 秒重绘驱动解决"字体就绪后引擎不重绘"的方块字问题（`kIsWeb` 门控）。修复前国内网络表现为：整页白屏（canvaskit 拉不下来）或中文方块字（字体拉不下来）。
 - **剩余**：iPhone 真机走查（中文输入、首屏加载、图片上传、会话保持、添加到主屏幕）。
+- **宽屏竖屏适配（2026-10-14）**：网页版在宽于手机的窗口（电脑、平板、横屏）中收成一列居中的竖屏、两侧留边；手机宽度内保持原样。实现为 `lib/widgets.dart` 的 `PortraitStage`（`MaterialApp.builder` 挂载，仅网页版生效），回归测试 `test/portrait_stage_test.dart`。
 - **本地端到端（真实浏览器）已走通**：引导 → 注册（Cookie 落地，`sessions.client` 记录为 `web/0.2.0+3`）→ 开始活动 → 写记录（草稿自动保存到服务端、跨刷新恢复）→ 完成并保存（探索册 +1）；刷新页面会话保持、免重登。网页端文案已按平台切换（不出现「存本机 / 等待同步」等措辞，「同步」入口隐藏）。
