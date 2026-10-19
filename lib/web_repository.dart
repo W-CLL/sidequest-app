@@ -481,6 +481,14 @@ class WebQuestRepository implements QuestRepository {
 
   // ---- 同步与诊断 ---------------------------------------------------------
 
+  // Web networking is controlled by the browser; this native-only setting
+  // is never shown or persisted by the web client.
+  @override
+  Future<bool> getMobileDataSyncEnabled() async => false;
+
+  @override
+  Future<void> setMobileDataSyncEnabled(bool enabled) async {}
+
   @override
   Future<void> syncNow({bool allowMetered = false}) async {
     if (_snapshot.profile == null) return;

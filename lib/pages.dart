@@ -398,7 +398,7 @@ class VersionPage extends StatelessWidget {
             const _LeafMark(),
             const SizedBox(height: 20),
             const Text(
-              '0.2.0 · 每天一条支线',
+              '0.2.1 · 每天一条支线',
               style: TextStyle(
                 fontSize: 25,
                 fontWeight: FontWeight.w700,

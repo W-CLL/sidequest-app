@@ -17,7 +17,8 @@ Future<bool> runBackgroundSync(QuestRepository repository) async {
     if (snapshot.profile == null) return true;
     final before = await repository.getSyncSummary();
     if (before.requiresLogin || !before.hasPending) return true;
-    await repository.syncNow(); // Never grants mobile-data authorization.
+    // The repository reads saved consent; the worker never grants a one-off batch.
+    await repository.syncNow();
     final after = await repository.getSyncSummary();
     return after.requiresLogin || !after.hasPending;
   } catch (_) {

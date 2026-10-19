@@ -97,6 +97,8 @@ class InMemoryQuestRepository implements QuestRepository {
   Future<void>? mediaHeadersGate;
   String branchId = 'fixture-branch';
   bool? lastAllowMetered;
+  bool mobileDataSyncEnabled = false;
+  bool failSyncSettings = false;
   SyncSummary? summaryOverride;
   final _updates = StreamController<SyncSummary>.broadcast();
   Future<EntryPageResult> Function(String query, String? cursor)? queryOverride;
@@ -481,6 +483,15 @@ class InMemoryQuestRepository implements QuestRepository {
       ),
     );
     await syncNow();
+  }
+
+  @override
+  Future<bool> getMobileDataSyncEnabled() async => mobileDataSyncEnabled;
+
+  @override
+  Future<void> setMobileDataSyncEnabled(bool enabled) async {
+    if (failSyncSettings) throw const QuestException('设置没保存，再试一次。');
+    mobileDataSyncEnabled = enabled;
   }
 
   @override

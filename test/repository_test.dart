@@ -13,6 +13,7 @@ import 'package:sidequest/media_normalizer.dart';
 import 'package:sidequest/offline_store.dart';
 import 'package:sidequest/remote_repository.dart';
 import 'package:sidequest/repository.dart';
+import 'package:sidequest/sync_worker.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 class MemoryTokens implements SessionTokenStore {
@@ -112,6 +113,7 @@ class _Api extends http.BaseClient {
   bool online = true, loseNext = false, tombstone = false, unauthorized = false;
   bool rejectPut = false;
   Future<void> Function()? beforeSync;
+  Future<void> Function()? afterUpload;
   http.StreamedResponse response(Object value, [int status = 200]) =>
       http.StreamedResponse(
         Stream.value(utf8.encode(jsonEncode(value))),
@@ -169,6 +171,7 @@ class _Api extends http.BaseClient {
           byteSize: bytes.length,
           mimeType: 'image/jpeg',
         );
+        await afterUpload?.call();
       }
       return response({'media': media[id]!.toJson()});
     }
@@ -328,6 +331,27 @@ void main() {
   Future<void> register() async {
     await repo.savePreferences('student', []);
     await repo.register('小探索家', 'safe-password');
+  }
+
+  Future<void> reopen({bool autoSync = false}) async {
+    await repo.dispose();
+    store = OfflineStore(
+      databaseFactory: databaseFactoryFfi,
+      databasePath: p.join(dir.path, 'state.sqlite'),
+      mediaRoot: p.join(dir.path, 'media'),
+      namespace: 'https://sidequest.test',
+      now: () => DateTime.utc(2026, 10, 10),
+    );
+    repo = RemoteQuestRepository(
+      apiBaseUrl: 'https://sidequest.test',
+      client: api,
+      tokenStore: tokens,
+      offlineStore: store,
+      preferences: await SharedPreferences.getInstance(),
+      wifiCheck: () async => wifi,
+      autoSync: autoSync,
+      now: () => DateTime.utc(2026, 10, 10),
+    );
   }
 
   Future<String> source([String name = 'source.jpg']) async {
@@ -633,6 +657,131 @@ void main() {
       expect(api.entries.values.single.attachments, isEmpty);
     },
   );
+  test('mobile data setting permits record and attachment sync without a one-off grant', () async {
+    await register();
+    wifi = false;
+    final image = await repo.stageMedia(await source(), MediaKind.image);
+    await repo.claim();
+    await repo.complete('移动数据下保存的记录', attachments: [image]);
+    await (await SharedPreferences.getInstance()).setBool(
+      'sidequest.sync.mobileDataEnabled',
+      true,
+    );
+
+    await repo.syncNow();
+
+    expect(api.entries.values.single.text, '移动数据下保存的记录');
+    expect(api.entries.values.single.attachments.single.status, 'ready');
+    expect(api.calls.where((c) => c.method == 'PUT'), hasLength(1));
+    expect((await repo.getSyncSummary()).hasPending, isFalse);
+  });
+
+  test(
+    'saved mobile consent resumes pending records after signing in again',
+    () async {
+      await register();
+      wifi = false;
+      await repo.claim();
+      await repo.complete('重新登录后继续同步');
+      await repo.setMobileDataSyncEnabled(true);
+      tokens.token = null;
+      await reopen(autoSync: true);
+
+      final synced = repo.syncUpdates.firstWhere(
+        (summary) => !summary.hasPending,
+      );
+      await repo.login('小探索家', 'safe-password');
+      await synced.timeout(const Duration(seconds: 3));
+
+      expect(api.entries.values, hasLength(1));
+      expect(api.entries.values.single.text, '重新登录后继续同步');
+    },
+  );
+
+  test('disabling mobile sync stops the next request without granting queued commands', () async {
+    await register();
+    wifi = false;
+    final image = await repo.stageMedia(await source(), MediaKind.image);
+    await repo.claim();
+    await repo.complete('关闭开关后先留在手机里', attachments: [image]);
+    await repo.setMobileDataSyncEnabled(true);
+    api.afterUpload = () => repo.setMobileDataSyncEnabled(false);
+
+    await expectLater(repo.syncNow(), throwsA(isA<QuestException>()));
+
+    expect(api.calls.where((c) => c.method == 'PUT'), hasLength(1));
+    expect(api.calls.where((c) => c.path == '/api/sync'), isEmpty);
+    final queued = await (await store.database).query('outbox');
+    expect(queued, isNotEmpty);
+    expect(queued.every((row) => row['metered_allowed'] == 0), isTrue);
+    expect(await File(image.localPath!).exists(), isTrue);
+    await repo.syncNow();
+    expect(api.entries, isEmpty);
+
+    api.afterUpload = null;
+    await repo.setMobileDataSyncEnabled(true);
+    await repo.syncNow();
+    expect(api.entries.values, hasLength(1));
+    expect(api.calls.where((c) => c.method == 'PUT'), hasLength(1));
+    expect((await repo.getSyncSummary()).hasPending, isFalse);
+  });
+
+  test(
+    'mobile setting survives reopen and off still permits a one-off sync',
+    () async {
+      expect(await repo.getMobileDataSyncEnabled(), isFalse);
+      await repo.setMobileDataSyncEnabled(true);
+      await reopen();
+      expect(await repo.getMobileDataSyncEnabled(), isTrue);
+      await repo.setMobileDataSyncEnabled(false);
+      await reopen();
+      expect(await repo.getMobileDataSyncEnabled(), isFalse);
+      await register();
+      wifi = false;
+      await repo.claim();
+      await repo.complete('只允许这一次');
+      await repo.syncNow();
+      expect(api.entries, isEmpty);
+      await repo.syncNow(allowMetered: true);
+      expect(api.entries.values, hasLength(1));
+      expect(await repo.getMobileDataSyncEnabled(), isFalse);
+    },
+  );
+
+  test(
+    'background worker reads saved mobile consent without a batch grant',
+    () async {
+      await register();
+      wifi = false;
+      await repo.claim();
+      await repo.complete('后台继续同步');
+      expect(await runBackgroundSync(repo), isFalse);
+      expect(api.entries, isEmpty);
+      await reopen();
+      await repo.setMobileDataSyncEnabled(true);
+      await reopen();
+      expect(await runBackgroundSync(repo), isTrue);
+      expect(api.entries.values.single.text, '后台继续同步');
+    },
+  );
+
+  test(
+    'enabling mobile sync starts queued foreground work immediately',
+    () async {
+      await register();
+      wifi = false;
+      await repo.claim();
+      await repo.complete('不用再次点击同步');
+      await reopen(autoSync: true);
+      final synced = repo.syncUpdates.firstWhere(
+        (summary) => !summary.hasPending,
+      );
+      await repo.setMobileDataSyncEnabled(true);
+      await synced.timeout(const Duration(seconds: 3));
+      expect(api.entries.values.single.text, '不用再次点击同步');
+    },
+  );
+
   test('令牌存储损坏时自愈：按未登录处理、清掉坏数据并回调上报', () async {
     final broken = _BrokenSecureStorage();
     Object? reported;
@@ -645,6 +794,9 @@ void main() {
   test('令牌写入失败映射为温和文案', () async {
     final broken = _BrokenSecureStorage(failRead: false, failWrite: true);
     final store = PlatformSessionTokenStore(scope: 'heal-test', secure: broken);
-    await expectLater(store.write('token-value'), throwsA(isA<QuestException>()));
+    await expectLater(
+      store.write('token-value'),
+      throwsA(isA<QuestException>()),
+    );
   });
 }

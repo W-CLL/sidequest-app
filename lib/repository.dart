@@ -53,6 +53,8 @@ abstract class QuestRepository {
   });
   Future<void> discardStagedMedia(List<String> ids);
   Future<void> removePendingAttachments(String entryId);
+  Future<bool> getMobileDataSyncEnabled();
+  Future<void> setMobileDataSyncEnabled(bool enabled);
   Future<void> syncNow({bool allowMetered = false});
   Future<SyncSummary> getSyncSummary();
   Stream<SyncSummary> get syncUpdates;
@@ -160,6 +162,10 @@ class ConfigurationRepository implements QuestRepository {
   Future<void> discardStagedMedia(List<String> ids) => _future();
   @override
   Future<void> removePendingAttachments(String entryId) => _future();
+  @override
+  Future<bool> getMobileDataSyncEnabled() => _future();
+  @override
+  Future<void> setMobileDataSyncEnabled(bool enabled) => _future();
   @override
   Future<void> syncNow({bool allowMetered = false}) => _future();
   @override

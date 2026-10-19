@@ -18,6 +18,7 @@ import 'offline_store.dart';
 import 'repository.dart';
 import 'silent_reporter.dart';
 import 'sync_schedule.dart';
+import 'sync_settings.dart';
 
 const _uuid = Uuid();
 
@@ -28,8 +29,10 @@ QuestRepository createPlatformRepository({required String apiBaseUrl}) =>
     : RemoteQuestRepository(apiBaseUrl: apiBaseUrl);
 
 class PlatformSessionTokenStore implements SessionTokenStore {
-  PlatformSessionTokenStore({this.scope = 'default', FlutterSecureStorage? secure})
-    : _secure = secure ?? const FlutterSecureStorage();
+  PlatformSessionTokenStore({
+    this.scope = 'default',
+    FlutterSecureStorage? secure,
+  }) : _secure = secure ?? const FlutterSecureStorage();
   final String scope;
   final FlutterSecureStorage _secure;
 
@@ -54,6 +57,7 @@ class PlatformSessionTokenStore implements SessionTokenStore {
       return null;
     }
   }
+
   @override
   Future<void> write(String token) async {
     if (kIsWeb) {
@@ -145,6 +149,7 @@ class RemoteQuestRepository implements QuestRepository {
        _client = client ?? http.Client(),
        _ownsClient = client == null,
        _prefs = preferences,
+       _syncSettings = SyncSettings(preferences: preferences),
        _wifiCheck = wifiCheck ?? _platformWifiCheck,
        _imageNormalizer = imageNormalizer ?? normalizeImageForUpload,
        // ignore: prefer_initializing_formals
@@ -209,8 +214,9 @@ class RemoteQuestRepository implements QuestRepository {
   @override
   void reportProblem(Object error, String scope) {
     if (!_reportingEnabled) return;
-    (_silentReporter ??= SilentReporter(_sendDiagnostic))
-        .report(error, scope, client: Platform.operatingSystem);
+    (_silentReporter ??= SilentReporter(
+      _sendDiagnostic,
+    )).report(error, scope, client: Platform.operatingSystem);
   }
 
   Future<void> _sendDiagnostic(Map<String, Object?> payload) async {
@@ -228,10 +234,15 @@ class RemoteQuestRepository implements QuestRepository {
         )
         .timeout(const Duration(seconds: 8));
   }
+
   final SessionTokenStore _tokens;
   final OfflineStore _offline;
   SharedPreferences? _prefs;
   final WifiCheck _wifiCheck;
+  final SyncSettings _syncSettings;
+
+  Future<bool> _canAutoSync() async =>
+      await _wifiCheck() || await _syncSettings.getMobileDataSyncEnabled();
   final ImageNormalizer _imageNormalizer;
   final bool _autoSync;
   final DateTime Function() _now;
@@ -328,9 +339,10 @@ class RemoteQuestRepository implements QuestRepository {
       _connectivitySubscription = Connectivity().onConnectivityChanged.listen((
         results,
       ) {
-        if (results.contains(ConnectivityResult.wifi) ||
-            results.contains(ConnectivityResult.ethernet)) {
-          _launchBackground(_bestEffortSync);
+        if (results.any((result) => result != ConnectivityResult.none)) {
+          _launchBackground(() async {
+            if (await _canAutoSync()) await _bestEffortSync();
+          });
         }
       });
     } on MissingPluginException {
@@ -550,7 +562,7 @@ class RemoteQuestRepository implements QuestRepository {
       throw const QuestException('账号已变更，请重试。');
     }
     if (await _offline.pendingCommandCount(account.id) != 0) {
-      throw const QuestException('请先完成待同步内容；移动网络下需要先在“同步”里手动同步。');
+      throw const QuestException('还有内容没同步，请先到“同步”里处理。');
     }
     return account;
   }
@@ -617,7 +629,7 @@ class RemoteQuestRepository implements QuestRepository {
       return;
     }
     _lastLoadAutoSyncAt = now;
-    if (!await _wifiCheck()) return;
+    if (!await _canAutoSync()) return;
     if (!_disposed) await _bestEffortSync();
   }
 
@@ -637,7 +649,7 @@ class RemoteQuestRepository implements QuestRepository {
     if (_disposed) return;
     await scheduleSyncWork();
     if (_disposed) return;
-    if (_autoSync && await _wifiCheck() && !_disposed) {
+    if (_autoSync && await _canAutoSync() && !_disposed) {
       await _bestEffortSync();
     }
   }
@@ -743,7 +755,7 @@ class RemoteQuestRepository implements QuestRepository {
         await _prefs!.remove('sidequest.remote.pending.$cacheScope');
       }
       await _emitSummary();
-      if (_autoSync && await _wifiCheck()) {
+      if (_autoSync && await _canAutoSync()) {
         _launchBackground(_bestEffortSync);
       }
       return account.snapshot;
@@ -1447,8 +1459,8 @@ class RemoteQuestRepository implements QuestRepository {
   }
 
   Future<void> _requireNetworkForBatch(bool meteredAuthorized) async {
-    if (!meteredAuthorized && !await _wifiCheck()) {
-      throw const QuestException('离开无线网了，同步先暂停。');
+    if (!meteredAuthorized && !await _canAutoSync()) {
+      throw const QuestException('同步已暂停，内容都还在。');
     }
   }
 
@@ -1807,8 +1819,8 @@ class RemoteQuestRepository implements QuestRepository {
         leaseHealthy: leaseHealthy,
       );
       await guard();
-      final initialWifi = await _wifiCheck();
-      if (!initialWifi) {
+      final automaticSyncAllowed = await _canAutoSync();
+      if (!automaticSyncAllowed) {
         prefetchedBatch = await _offline.captureBatch(
           accountId: account.id,
           wifi: false,
@@ -1847,7 +1859,9 @@ class RemoteQuestRepository implements QuestRepository {
             prefetchedBatch ??
             await _offline.captureBatch(
               accountId: account.id,
-              wifi: await _wifiCheck(),
+              // The persistent setting must not become a permanent per-command
+              // grant: disabling it must stop later automatic mobile uploads.
+              wifi: await _canAutoSync(),
               allowMetered: false,
               limit: captureLimit,
             );
@@ -1870,6 +1884,9 @@ class RemoteQuestRepository implements QuestRepository {
               ),
             );
           }
+          // Consent may change while a file upload is already in flight.
+          // Keep its result, but do not begin the next request after revocation.
+          await _requireNetworkForBatch(batch.meteredAuthorized);
           final wireBody = {
             'branchId': batch.branch.id,
             'baseRevision': batch.branch.baseRevision,
@@ -1994,6 +2011,18 @@ class RemoteQuestRepository implements QuestRepository {
       if (renewal != null) await renewal;
       if (acquired) await _offline.releaseLease(_syncLeaseOwner);
     }
+  }
+
+  @override
+  Future<bool> getMobileDataSyncEnabled() =>
+      _syncSettings.getMobileDataSyncEnabled();
+
+  @override
+  Future<void> setMobileDataSyncEnabled(bool enabled) async {
+    if (_disposed) throw const QuestException('设置没保存，请重新打开后再试。');
+    await _syncSettings.setMobileDataSyncEnabled(enabled);
+    await refreshSyncScheduling();
+    if (enabled && _autoSync) _launchBackground(_bestEffortSync);
   }
 
   @override

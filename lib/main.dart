@@ -1212,7 +1212,7 @@ class _QuestHomeState extends State<QuestHome> with WidgetsBindingObserver {
       menu(
         Icons.info_outline,
         '版本说明',
-        '0.2.0 · 多媒体记录',
+        '0.2.1 · 多媒体记录',
         () => Navigator.push(
           context,
           MaterialPageRoute<void>(

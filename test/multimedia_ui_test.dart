@@ -811,6 +811,55 @@ void main() {
   );
 
   testWidgets(
+    'mobile data sync switch is off by default and survives reopening',
+    (tester) async {
+      configureTestView(tester);
+      final repo = await createLocalFixture(fixture: LocalFixture.completed);
+      final toggle = find.byKey(const Key('sync-mobile-data'));
+      await tester.pumpWidget(
+        MaterialApp(home: SyncStatusPage(repository: repo)),
+      );
+      await tester.pumpAndSettle();
+      expect(toggle, findsOneWidget);
+      expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpWidget(
+        MaterialApp(home: SyncStatusPage(repository: repo)),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+      await revealAndTap(tester, find.byKey(const Key('sync-upload-now')));
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(repo.lastAllowMetered, isFalse);
+      expectNoLayoutException(tester);
+    },
+  );
+
+  testWidgets('failed mobile setting save leaves the switch unchanged', (
+    tester,
+  ) async {
+    configureTestView(tester);
+    final repo = await createLocalFixture(fixture: LocalFixture.completed);
+    repo.failSyncSettings = true;
+    await tester.pumpWidget(
+      MaterialApp(home: SyncStatusPage(repository: repo)),
+    );
+    await tester.pumpAndSettle();
+    final toggle = find.byKey(const Key('sync-mobile-data'));
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    expect(repo.mobileDataSyncEnabled, isFalse);
+    expect(find.text('设置没保存，再试一次。'), findsOneWidget);
+    expect(repo.reportedProblems.single.$1, 'sync.settings');
+    expectNoLayoutException(tester);
+  });
+
+  testWidgets(
     'sync now asks for metered batch permission and exposes conflicts',
     (tester) async {
       configureTestView(tester);

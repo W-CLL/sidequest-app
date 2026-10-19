@@ -9,7 +9,9 @@ import 'package:share_plus/share_plus.dart';
 import 'domain.dart';
 import 'media_widgets.dart';
 import 'repository.dart';
-import 'exit_guard_io.dart' if (dart.library.js_interop) 'exit_guard_web.dart' as exit_guard;
+import 'exit_guard_io.dart'
+    if (dart.library.js_interop) 'exit_guard_web.dart'
+    as exit_guard;
 import 'voice.dart';
 
 const _muted = Color(0xFF69756C);
@@ -254,9 +256,11 @@ class _RecordPageState extends State<RecordPage> with WidgetsBindingObserver {
       _removedMedia.removeAll(unused);
     } catch (_) {
       if (mounted) {
-        setState(() => _error = _localDraft
-            ? '内容已保存，移除附件的本机副本暂未清理。下次保存时重试。'
-            : '内容已保存，移除的附件暂未清理，下次保存时重试。');
+        setState(
+          () => _error = _localDraft
+              ? '内容已保存，移除附件的本机副本暂未清理。下次保存时重试。'
+              : '内容已保存，移除的附件暂未清理，下次保存时重试。',
+        );
       }
     }
   }
@@ -1067,6 +1071,8 @@ class SyncStatusPage extends StatefulWidget {
 
 class _SyncStatusPageState extends State<SyncStatusPage> {
   SyncSummary? _summary;
+  bool? _mobileDataEnabled;
+  bool _savingSettings = false;
   AppSnapshot? _state;
   StreamSubscription<SyncSummary>? _subscription;
   String? _error;
@@ -1099,29 +1105,56 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
   Future<void> _refresh() async {
     try {
       final summary = await widget.repository.getSyncSummary();
-      if (mounted) setState(() => _summary = summary);
+      final mobileDataEnabled = await widget.repository
+          .getMobileDataSyncEnabled();
+      if (mounted) {
+        setState(() {
+          _summary = summary;
+          _mobileDataEnabled = mobileDataEnabled;
+        });
+      }
       await _refreshState();
     } catch (error) {
       if (mounted) setState(() => _error = _errorText(error));
     }
   }
 
+  Future<void> _setMobileDataSync(bool enabled) async {
+    if (_savingSettings) return;
+    setState(() {
+      _savingSettings = true;
+      _error = null;
+    });
+    try {
+      await widget.repository.setMobileDataSyncEnabled(enabled);
+      if (mounted) setState(() => _mobileDataEnabled = enabled);
+    } catch (error) {
+      widget.repository.reportProblem(error, 'sync.settings');
+      if (mounted) setState(() => _error = _errorText(error));
+    } finally {
+      if (mounted) setState(() => _savingSettings = false);
+    }
+  }
+
   Future<void> _upload() async {
-    if (!await confirmPrivateAction(
+    if (_busy || _savingSettings || _mobileDataEnabled == null) return;
+    final authorizeThisBatch = !_mobileDataEnabled!;
+    if (authorizeThisBatch &&
+        !await confirmPrivateAction(
           context,
           '现在同步？',
-          '这次会用流量，只同步确认的这一批；之后仍在无线网时自动同步。',
+          '这次允许使用流量，只同步确认的这一批。',
           '同步',
-        ) ||
-        !mounted) {
+        )) {
       return;
     }
+    if (!mounted) return;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      await widget.repository.syncNow(allowMetered: true);
+      await widget.repository.syncNow(allowMetered: authorizeThisBatch);
       await _refresh();
     } catch (error) {
       if (mounted) setState(() => _error = _errorText(error));
@@ -1237,10 +1270,27 @@ class _SyncStatusPageState extends State<SyncStatusPage> {
               child: const Text('重新登录'),
             ),
           ],
+          if (!widget.repository.isWebClient) ...[
+            const SizedBox(height: 16),
+            SwitchListTile(
+              key: const Key('sync-mobile-data'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('使用移动数据同步'),
+              subtitle: const Text('包含照片、视频和录音，会消耗流量。'),
+              value: _mobileDataEnabled ?? false,
+              onChanged: _savingSettings || _mobileDataEnabled == null
+                  ? null
+                  : _setMobileDataSync,
+            ),
+          ],
           const SizedBox(height: 16),
           FilledButton(
             key: const Key('sync-upload-now'),
-            onPressed: _busy || _summary?.requiresLogin == true
+            onPressed:
+                _busy ||
+                    _savingSettings ||
+                    _mobileDataEnabled == null ||
+                    _summary?.requiresLogin == true
                 ? null
                 : _upload,
             child: Text(_busy ? '正在同步…' : '同步'),

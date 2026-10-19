@@ -456,6 +456,38 @@ void main() {
     );
   }, timeout: const Timeout(Duration(seconds: 60)));
 
+  test('persistent mobile consent uploads real media and turning it off keeps later records local', () async {
+    final device = harness.device('mobile-setting', wifi: () async => false);
+    await device.register('MobileSettingUser');
+    final source = await harness.createImage('mobile-source');
+    final media = await device.repo.stageMedia(source.path, MediaKind.image);
+    await device.repo.claim();
+    await device.repo.complete('移动数据下的图片记录', attachments: [media]);
+    await device.repo.syncNow();
+    expect(device.client.uploads, 0);
+    expect((await harness.api('entries', device.tokens))['total'], 0);
+
+    await device.repo.setMobileDataSyncEnabled(true);
+    await device.repo.syncNow();
+    final saved = (await device.repo.queryEntries()).entries.single;
+    expect(saved.text, '移动数据下的图片记录');
+    expect(saved.attachments.single.mimeType, 'image/jpeg');
+    expect(device.client.uploads, 1);
+    expect((await device.repo.getSyncSummary()).hasPending, isFalse);
+    expect(await source.exists(), isTrue);
+
+    await device.repo.setMobileDataSyncEnabled(false);
+    await device.repo.nextQuest();
+    await device.repo.claim();
+    await device.repo.complete('关闭后等待同步');
+    await device.repo.syncNow();
+    expect((await harness.api('entries', device.tokens))['total'], 1);
+    expect((await device.repo.getSyncSummary()).hasPending, isTrue);
+    await device.repo.syncNow(allowMetered: true);
+    expect((await harness.api('entries', device.tokens))['total'], 2);
+    expect(await device.repo.getMobileDataSyncEnabled(), isFalse);
+  }, timeout: const Timeout(Duration(seconds: 60)));
+
   test('real media upload remains private and source survives until a record receipt', () async {
     final device = harness.device('media');
     await device.register('MediaUser');
